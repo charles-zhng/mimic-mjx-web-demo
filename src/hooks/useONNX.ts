@@ -20,7 +20,8 @@ export function useONNX(): UseONNXResult {
     async function init() {
       try {
         // Configure ONNX Runtime for WASM backend
-        ort.env.wasm.wasmPaths = '/node_modules/onnxruntime-web/dist/'
+        // Use CDN for production, local for development
+        ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.2/dist/'
 
         // Create inference session
         const onnxSession = await ort.InferenceSession.create(
