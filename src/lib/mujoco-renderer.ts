@@ -14,6 +14,21 @@ interface GeomInfo {
   geomId: number
 }
 
+interface SkinInfo {
+  mesh: THREE.Mesh
+  geometry: THREE.BufferGeometry
+  vertexStart: number
+  vertexCount: number
+  boneStart: number
+  boneCount: number
+  // Per-vertex bone data
+  boneBodyIds: Int32Array // body id for each bone
+  boneBindPos: Float32Array // bind position for each bone (3 floats)
+  boneBindQuat: Float32Array // bind quaternion for each bone (4 floats)
+  vertBoneId: Int32Array // bone indices for each vertex (up to 4)
+  vertBoneWeight: Float32Array // bone weights for each vertex (up to 4)
+}
+
 /**
  * Helper to convert MuJoCo array property to typed array.
  * MuJoCo WASM returns Float64Array views for most properties.
@@ -38,6 +53,7 @@ function toInt32Array(arr: unknown): Int32Array {
  */
 export class MuJoCoRenderer {
   private geoms: GeomInfo[] = []
+  private skins: SkinInfo[] = []
   private model: MjModel
   private scene: THREE.Scene
 
@@ -45,6 +61,7 @@ export class MuJoCoRenderer {
     this.model = model
     this.scene = scene
     this.createGeometries()
+    this.createSkins()
   }
 
   /**
@@ -136,6 +153,150 @@ export class MuJoCoRenderer {
   }
 
   /**
+   * Create Three.js meshes for MuJoCo skins.
+   * Skins are deformable meshes attached to bones (bodies).
+   */
+  private createSkins(): void {
+    const { model, scene } = this
+
+    const nskin = model.nskin as number
+    if (nskin === 0) {
+      console.log('No skins in model')
+      return
+    }
+
+    console.log(`Creating ${nskin} skin meshes`)
+
+    // Get skin data arrays from model
+    const skinVertAdr = toInt32Array(model.skin_vertadr)
+    const skinVertNum = toInt32Array(model.skin_vertnum)
+    const skinFaceAdr = toInt32Array(model.skin_faceadr)
+    const skinFaceNum = toInt32Array(model.skin_facenum)
+    const skinBoneAdr = toInt32Array(model.skin_boneadr)
+    const skinBoneNum = toInt32Array(model.skin_bonenum)
+    const skinVert = toFloat32Array(model.skin_vert)
+    const skinFace = toInt32Array(model.skin_face)
+    const skinBoneBodyId = toInt32Array(model.skin_bonebodyid)
+    const skinBoneBindPos = toFloat32Array(model.skin_bonebindpos)
+    const skinBoneBindQuat = toFloat32Array(model.skin_bonebindquat)
+    const skinBoneVertAdr = toInt32Array(model.skin_bonevertadr)
+    const skinBoneVertNum = toInt32Array(model.skin_bonevertnum)
+    const skinBoneVertId = toInt32Array(model.skin_bonevertid)
+    const skinBoneVertWeight = toFloat32Array(model.skin_bonevertweight)
+    const skinRgba = toFloat32Array(model.skin_rgba)
+
+    for (let skinId = 0; skinId < nskin; skinId++) {
+      const vertStart = skinVertAdr[skinId]
+      const vertCount = skinVertNum[skinId]
+      const faceStart = skinFaceAdr[skinId]
+      const faceCount = skinFaceNum[skinId]
+      const boneStart = skinBoneAdr[skinId]
+      const boneCount = skinBoneNum[skinId]
+
+      console.log(`Skin ${skinId}: ${vertCount} vertices, ${faceCount} faces, ${boneCount} bones`)
+
+      // Create geometry
+      const geometry = new THREE.BufferGeometry()
+
+      // Copy vertex positions (will be updated each frame)
+      const positions = new Float32Array(vertCount * 3)
+      for (let i = 0; i < vertCount * 3; i++) {
+        positions[i] = skinVert[vertStart * 3 + i]
+      }
+      geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+
+      // Copy face indices (adjusted for local vertex indices)
+      const indices = new Uint32Array(faceCount * 3)
+      for (let i = 0; i < faceCount * 3; i++) {
+        indices[i] = skinFace[faceStart * 3 + i]
+      }
+      geometry.setIndex(new THREE.BufferAttribute(indices, 1))
+
+      // Compute normals
+      geometry.computeVertexNormals()
+
+      // Get skin color
+      const rgba = [
+        skinRgba[skinId * 4],
+        skinRgba[skinId * 4 + 1],
+        skinRgba[skinId * 4 + 2],
+        skinRgba[skinId * 4 + 3]
+      ]
+
+      // Create material
+      const material = new THREE.MeshPhongMaterial({
+        color: new THREE.Color(rgba[0], rgba[1], rgba[2]),
+        transparent: rgba[3] < 1,
+        opacity: rgba[3],
+        side: THREE.DoubleSide,
+        flatShading: false,
+      })
+
+      const mesh = new THREE.Mesh(geometry, material)
+      mesh.castShadow = true
+      mesh.receiveShadow = true
+      scene.add(mesh)
+
+      // Store bone data for vertex skinning
+      const boneBodyIds = new Int32Array(boneCount)
+      const boneBindPos = new Float32Array(boneCount * 3)
+      const boneBindQuat = new Float32Array(boneCount * 4)
+
+      for (let b = 0; b < boneCount; b++) {
+        const boneIdx = boneStart + b
+        boneBodyIds[b] = skinBoneBodyId[boneIdx]
+        boneBindPos[b * 3] = skinBoneBindPos[boneIdx * 3]
+        boneBindPos[b * 3 + 1] = skinBoneBindPos[boneIdx * 3 + 1]
+        boneBindPos[b * 3 + 2] = skinBoneBindPos[boneIdx * 3 + 2]
+        boneBindQuat[b * 4] = skinBoneBindQuat[boneIdx * 4]
+        boneBindQuat[b * 4 + 1] = skinBoneBindQuat[boneIdx * 4 + 1]
+        boneBindQuat[b * 4 + 2] = skinBoneBindQuat[boneIdx * 4 + 2]
+        boneBindQuat[b * 4 + 3] = skinBoneBindQuat[boneIdx * 4 + 3]
+      }
+
+      // Build per-vertex bone indices and weights (up to 4 bones per vertex)
+      const vertBoneId = new Int32Array(vertCount * 4).fill(-1)
+      const vertBoneWeight = new Float32Array(vertCount * 4).fill(0)
+
+      for (let b = 0; b < boneCount; b++) {
+        const boneIdx = boneStart + b
+        const bvStart = skinBoneVertAdr[boneIdx]
+        const bvCount = skinBoneVertNum[boneIdx]
+
+        for (let bv = 0; bv < bvCount; bv++) {
+          const vertId = skinBoneVertId[bvStart + bv]
+          const weight = skinBoneVertWeight[bvStart + bv]
+
+          // Find empty slot for this vertex (up to 4 bones)
+          for (let slot = 0; slot < 4; slot++) {
+            if (vertBoneId[vertId * 4 + slot] === -1) {
+              vertBoneId[vertId * 4 + slot] = b
+              vertBoneWeight[vertId * 4 + slot] = weight
+              break
+            }
+          }
+        }
+      }
+
+      this.skins.push({
+        mesh,
+        geometry,
+        vertexStart: vertStart,
+        vertexCount: vertCount,
+        boneStart,
+        boneCount,
+        boneBodyIds,
+        boneBindPos,
+        boneBindQuat,
+        vertBoneId,
+        vertBoneWeight,
+      })
+    }
+
+    console.log(`Created ${this.skins.length} skin meshes`)
+  }
+
+  /**
    * Sync Three.js mesh transforms from MuJoCo simulation data.
    */
   private debugCount = 0
@@ -182,6 +343,88 @@ export class MuJoCoRenderer {
       // Extract quaternion from rotation matrix
       mesh.quaternion.setFromRotationMatrix(mat4)
     }
+
+    // Update skin vertices
+    this.updateSkins(data)
+  }
+
+  /**
+   * Update skin mesh vertices based on bone transforms.
+   */
+  private updateSkins(data: MjData): void {
+    const bodyXpos = toFloat32Array(data.xpos)
+    const bodyXquat = toFloat32Array(data.xquat)
+
+    // Temporary vectors for skinning calculations
+    const bindPos = new THREE.Vector3()
+    const bindQuat = new THREE.Quaternion()
+    const currentPos = new THREE.Vector3()
+    const currentQuat = new THREE.Quaternion()
+    const vertexBind = new THREE.Vector3()
+    const vertexLocal = new THREE.Vector3()
+    const vertexWorld = new THREE.Vector3()
+    const vertexResult = new THREE.Vector3()
+
+    for (const skin of this.skins) {
+      const positions = skin.geometry.attributes.position.array as Float32Array
+      const { boneBodyIds, boneBindPos, boneBindQuat, vertBoneId, vertBoneWeight, vertexCount } = skin
+
+      // Transform each vertex
+      const skinVert = toFloat32Array(this.model.skin_vert)
+      for (let v = 0; v < vertexCount; v++) {
+        vertexResult.set(0, 0, 0)
+        let totalWeight = 0
+
+        // Get original vertex position in bind pose
+        const vIdx = skin.vertexStart + v
+        vertexBind.set(skinVert[vIdx * 3], skinVert[vIdx * 3 + 1], skinVert[vIdx * 3 + 2])
+
+        // Accumulate weighted bone transforms
+        for (let slot = 0; slot < 4; slot++) {
+          const boneIdx = vertBoneId[v * 4 + slot]
+          if (boneIdx === -1) continue
+
+          const weight = vertBoneWeight[v * 4 + slot]
+          if (Math.abs(weight) < 0.0001) continue
+
+          const bodyId = boneBodyIds[boneIdx]
+
+          // Get bind pose for this bone
+          bindPos.set(boneBindPos[boneIdx * 3], boneBindPos[boneIdx * 3 + 1], boneBindPos[boneIdx * 3 + 2])
+          bindQuat.set(boneBindQuat[boneIdx * 4 + 1], boneBindQuat[boneIdx * 4 + 2], boneBindQuat[boneIdx * 4 + 3], boneBindQuat[boneIdx * 4])
+
+          // Get current pose for this bone's body
+          currentPos.set(bodyXpos[bodyId * 3], bodyXpos[bodyId * 3 + 1], bodyXpos[bodyId * 3 + 2])
+          currentQuat.set(bodyXquat[bodyId * 4 + 1], bodyXquat[bodyId * 4 + 2], bodyXquat[bodyId * 4 + 3], bodyXquat[bodyId * 4])
+
+          // Transform vertex from bind pose to local bone space, then to world
+          // v_local = bindQuat^-1 * (v_bind - bindPos)
+          // v_world = currentQuat * v_local + currentPos
+          vertexLocal.copy(vertexBind).sub(bindPos)
+          vertexLocal.applyQuaternion(bindQuat.clone().invert())
+          vertexWorld.copy(vertexLocal).applyQuaternion(currentQuat).add(currentPos)
+
+          vertexResult.addScaledVector(vertexWorld, weight)
+          totalWeight += weight
+        }
+
+        // Normalize by total weight (handle edge case)
+        if (totalWeight > 0.0001) {
+          vertexResult.divideScalar(totalWeight)
+        } else {
+          vertexResult.copy(vertexBind)
+        }
+
+        // Update position buffer
+        positions[v * 3] = vertexResult.x
+        positions[v * 3 + 1] = vertexResult.y
+        positions[v * 3 + 2] = vertexResult.z
+      }
+
+      // Mark geometry for update
+      skin.geometry.attributes.position.needsUpdate = true
+      skin.geometry.computeVertexNormals()
+    }
   }
 
   /**
@@ -196,5 +439,14 @@ export class MuJoCoRenderer {
       this.scene.remove(geom.mesh)
     }
     this.geoms = []
+
+    for (const skin of this.skins) {
+      skin.mesh.geometry.dispose()
+      if (skin.mesh.material instanceof THREE.Material) {
+        skin.mesh.material.dispose()
+      }
+      this.scene.remove(skin.mesh)
+    }
+    this.skins = []
   }
 }
