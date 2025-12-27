@@ -7,7 +7,7 @@ import { useMotionClips } from './hooks/useMotionClips'
 import { useSimulation } from './hooks/useSimulation'
 
 function App() {
-  const [selectedClip, setSelectedClip] = useState(0)
+  const [selectedClip, setSelectedClip] = useState(3) // clip_0280
   const [isPlaying, setIsPlaying] = useState(false)
   const [speed, setSpeed] = useState(1.0)
 
