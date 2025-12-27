@@ -18,10 +18,12 @@ from pathlib import Path
 
 import h5py
 import numpy as np
+import yaml
 
 
 def export_clips(input_path: str, output_path: str, num_clips: int = 10,
-                clip_length: int = 250, compress: bool = True):
+                clip_length: int = 250, compress: bool = True,
+                clip_indices: list[int] | None = None):
     """Export motion clips to web-friendly format.
 
     Args:
@@ -43,16 +45,27 @@ def export_clips(input_path: str, output_path: str, num_clips: int = 10,
             body_names = f['names_xpos'][()].astype(str).tolist()
             print(f"Body names: {body_names[:5]}... ({len(body_names)} total)")
 
+        # Load config and extract clip names from snips_order
+        config = yaml.safe_load(f['config'][()])
+        snips_order = config["model"]["snips_order"]
+        clip_names = [fn.replace('.p', '') for fn in snips_order]
+        print(f"Clip names available: {len(clip_names)}")
+
     total_frames = qpos.shape[0]
     total_clips = total_frames // clip_length
     num_clips = min(num_clips, total_clips)
 
     print(f"Total frames: {total_frames}")
     print(f"Total clips available: {total_clips}")
-    print(f"Exporting {num_clips} clips")
 
-    # Select clips evenly distributed across the dataset
-    clip_indices = np.linspace(0, total_clips - 1, num_clips, dtype=int)
+    # Select clips: use provided indices or evenly distribute
+    if clip_indices is not None:
+        clip_indices = np.array(clip_indices)
+        num_clips = len(clip_indices)
+    else:
+        clip_indices = np.linspace(0, total_clips - 1, num_clips, dtype=int)
+
+    print(f"Exporting {num_clips} clips")
 
     clips = []
     for i, clip_idx in enumerate(clip_indices):
@@ -61,7 +74,7 @@ def export_clips(input_path: str, output_path: str, num_clips: int = 10,
 
         clip_data = {
             "id": int(clip_idx),
-            "name": f"clip_{clip_idx:04d}",
+            "name": clip_names[clip_idx],
             "num_frames": clip_length,
             # Store as nested lists for JSON serialization
             # Use float16 precision to reduce size, then convert to list
@@ -141,8 +154,19 @@ def main():
         action="store_true",
         help="Disable gzip compression",
     )
+    parser.add_argument(
+        "--clip-indices",
+        type=str,
+        default=None,
+        help="Comma-separated list of clip indices to export (overrides --num-clips)",
+    )
 
     args = parser.parse_args()
+
+    # Parse clip indices if provided
+    clip_indices = None
+    if args.clip_indices:
+        clip_indices = [int(x.strip()) for x in args.clip_indices.split(',')]
 
     export_clips(
         args.input,
@@ -150,6 +174,7 @@ def main():
         num_clips=args.num_clips,
         clip_length=args.clip_length,
         compress=not args.no_compress,
+        clip_indices=clip_indices,
     )
 
 
