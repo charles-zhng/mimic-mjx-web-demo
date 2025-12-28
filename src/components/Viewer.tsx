@@ -77,11 +77,6 @@ export default function Viewer({ mujoco, model, data, isReady }: ViewerProps) {
     directionalLight.shadow.camera.bottom = -2
     scene.add(directionalLight)
 
-    // Grid helper - rotate to XY plane (Z=0) for MuJoCo Z-up convention
-    const gridHelper = new THREE.GridHelper(2, 20, 0x444444, 0x333333)
-    gridHelper.rotation.x = Math.PI / 2
-    scene.add(gridHelper)
-
     // Handle resize
     const handleResize = () => {
       if (!containerRef.current || !camera || !renderer) return

@@ -27,6 +27,8 @@ interface SkinInfo {
   boneBindQuat: Float32Array // bind quaternion for each bone (4 floats)
   vertBoneId: Int32Array // bone indices for each vertex (up to 4)
   vertBoneWeight: Float32Array // bone weights for each vertex (up to 4)
+  // Bind pose normals for smooth shading
+  bindNormals: Float32Array
 }
 
 /**
@@ -61,7 +63,8 @@ export class MuJoCoRenderer {
     this.model = model
     this.scene = scene
     this.createGeometries()
-    this.createSkins()
+    // Skin rendering disabled - using geoms only
+    void this._createSkins
   }
 
   /**
@@ -89,11 +92,49 @@ export class MuJoCoRenderer {
       let geometry: THREE.BufferGeometry | null = null
 
       switch (type) {
-        case GEOM_PLANE:
-          // Create a large plane for the ground
+        case GEOM_PLANE: {
+          // Create a large plane for the ground with MuJoCo-style checkerboard
           // MuJoCo plane normal is +Z, Three.js PlaneGeometry faces +Z
           geometry = new THREE.PlaneGeometry(10, 10)
-          break
+
+          // Create checkerboard texture
+          const checkerSize = 64 // pixels per square
+          const numSquares = 16 // number of squares per side
+          const texSize = checkerSize * numSquares
+          const canvas = document.createElement('canvas')
+          canvas.width = texSize
+          canvas.height = texSize
+          const ctx = canvas.getContext('2d')!
+
+          // MuJoCo default checkerboard colors (light grey and dark grey)
+          const color1 = '#999999'
+          const color2 = '#666666'
+
+          for (let y = 0; y < numSquares; y++) {
+            for (let x = 0; x < numSquares; x++) {
+              ctx.fillStyle = (x + y) % 2 === 0 ? color1 : color2
+              ctx.fillRect(x * checkerSize, y * checkerSize, checkerSize, checkerSize)
+            }
+          }
+
+          const texture = new THREE.CanvasTexture(canvas)
+          texture.wrapS = THREE.RepeatWrapping
+          texture.wrapT = THREE.RepeatWrapping
+          texture.repeat.set(1, 1)
+
+          const planeMaterial = new THREE.MeshStandardMaterial({
+            map: texture,
+            side: THREE.DoubleSide,
+            roughness: 0.8,
+            metalness: 0.0,
+          })
+
+          const planeMesh = new THREE.Mesh(geometry, planeMaterial)
+          planeMesh.receiveShadow = true
+          scene.add(planeMesh)
+          this.geoms.push({ mesh: planeMesh, geomId: i })
+          continue // Skip the default material creation below
+        }
 
         case GEOM_SPHERE:
           geometry = new THREE.SphereGeometry(size[0], 16, 16)
@@ -133,16 +174,16 @@ export class MuJoCoRenderer {
 
       if (!geometry) continue
 
-      // Create material
+      // Create material (planes are handled separately above)
       const material = new THREE.MeshPhongMaterial({
         color: new THREE.Color(rgba[0], rgba[1], rgba[2]),
         transparent: rgba[3] < 1,
         opacity: rgba[3],
-        side: type === GEOM_PLANE ? THREE.DoubleSide : THREE.FrontSide,
+        side: THREE.FrontSide,
       })
 
       const mesh = new THREE.Mesh(geometry, material)
-      mesh.castShadow = type !== GEOM_PLANE
+      mesh.castShadow = true
       mesh.receiveShadow = true
 
       scene.add(mesh)
@@ -155,8 +196,9 @@ export class MuJoCoRenderer {
   /**
    * Create Three.js meshes for MuJoCo skins.
    * Skins are deformable meshes attached to bones (bodies).
+   * Currently disabled - using geoms only.
    */
-  private createSkins(): void {
+  private _createSkins(): void {
     const { model, scene } = this
 
     const nskin = model.nskin as number
@@ -183,7 +225,8 @@ export class MuJoCoRenderer {
     const skinBoneVertNum = toInt32Array(model.skin_bonevertnum)
     const skinBoneVertId = toInt32Array(model.skin_bonevertid)
     const skinBoneVertWeight = toFloat32Array(model.skin_bonevertweight)
-    const skinRgba = toFloat32Array(model.skin_rgba)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const skinNormal = toFloat32Array((model as any).skin_normal)
 
     for (let skinId = 0; skinId < nskin; skinId++) {
       const vertStart = skinVertAdr[skinId]
@@ -193,7 +236,7 @@ export class MuJoCoRenderer {
       const boneStart = skinBoneAdr[skinId]
       const boneCount = skinBoneNum[skinId]
 
-      console.log(`Skin ${skinId}: ${vertCount} vertices, ${faceCount} faces, ${boneCount} bones`)
+      console.log(`Skin ${skinId}: ${vertCount} vertices, ${faceCount} faces, ${boneCount} bones, skinNormal length: ${skinNormal.length}`)
 
       // Create geometry
       const geometry = new THREE.BufferGeometry()
@@ -212,24 +255,86 @@ export class MuJoCoRenderer {
       }
       geometry.setIndex(new THREE.BufferAttribute(indices, 1))
 
-      // Compute normals
-      geometry.computeVertexNormals()
+      // Compute smooth vertex normals by averaging face normals at each position
+      const normals = new Float32Array(vertCount * 3)
+      const bindNormals = new Float32Array(vertCount * 3)
+      const hasNormals = skinNormal.length >= (vertStart + vertCount) * 3
 
-      // Get skin color
-      const rgba = [
-        skinRgba[skinId * 4],
-        skinRgba[skinId * 4 + 1],
-        skinRgba[skinId * 4 + 2],
-        skinRgba[skinId * 4 + 3]
-      ]
+      if (hasNormals) {
+        for (let i = 0; i < vertCount * 3; i++) {
+          const n = skinNormal[vertStart * 3 + i]
+          normals[i] = n
+          bindNormals[i] = n
+        }
+        console.log(`Using model normals`)
+      } else {
+        // Compute smooth normals by averaging face normals at each vertex position
+        // First, build a map from position -> accumulated normal
+        const posToNormal = new Map<string, THREE.Vector3>()
 
-      // Create material
-      const material = new THREE.MeshPhongMaterial({
-        color: new THREE.Color(rgba[0], rgba[1], rgba[2]),
-        transparent: rgba[3] < 1,
-        opacity: rgba[3],
+        const v0 = new THREE.Vector3()
+        const v1 = new THREE.Vector3()
+        const v2 = new THREE.Vector3()
+        const faceNormal = new THREE.Vector3()
+        const edge1 = new THREE.Vector3()
+        const edge2 = new THREE.Vector3()
+
+        // Compute face normals and accumulate at each vertex position
+        for (let f = 0; f < faceCount; f++) {
+          const i0 = indices[f * 3]
+          const i1 = indices[f * 3 + 1]
+          const i2 = indices[f * 3 + 2]
+
+          v0.set(positions[i0 * 3], positions[i0 * 3 + 1], positions[i0 * 3 + 2])
+          v1.set(positions[i1 * 3], positions[i1 * 3 + 1], positions[i1 * 3 + 2])
+          v2.set(positions[i2 * 3], positions[i2 * 3 + 1], positions[i2 * 3 + 2])
+
+          edge1.subVectors(v1, v0)
+          edge2.subVectors(v2, v0)
+          faceNormal.crossVectors(edge1, edge2).normalize()
+
+          // Accumulate face normal at each vertex position
+          for (const v of [v0, v1, v2]) {
+            // Use rounded position as key to group nearby vertices
+            const key = `${v.x.toFixed(5)},${v.y.toFixed(5)},${v.z.toFixed(5)}`
+            if (!posToNormal.has(key)) {
+              posToNormal.set(key, new THREE.Vector3())
+            }
+            posToNormal.get(key)!.add(faceNormal)
+          }
+        }
+
+        // Normalize accumulated normals
+        for (const normal of posToNormal.values()) {
+          normal.normalize()
+        }
+
+        // Assign smooth normals to each vertex
+        for (let v = 0; v < vertCount; v++) {
+          const px = positions[v * 3]
+          const py = positions[v * 3 + 1]
+          const pz = positions[v * 3 + 2]
+          const key = `${px.toFixed(5)},${py.toFixed(5)},${pz.toFixed(5)}`
+          const normal = posToNormal.get(key)
+          if (normal) {
+            normals[v * 3] = normal.x
+            normals[v * 3 + 1] = normal.y
+            normals[v * 3 + 2] = normal.z
+            bindNormals[v * 3] = normal.x
+            bindNormals[v * 3 + 1] = normal.y
+            bindNormals[v * 3 + 2] = normal.z
+          }
+        }
+        console.log(`Computed smooth normals for ${vertCount} vertices`)
+      }
+      geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3))
+
+      // Create material with light grey color and nice shading
+      const material = new THREE.MeshStandardMaterial({
+        color: 0xb8b8b8, // Light grey
+        roughness: 0.6,
+        metalness: 0.1,
         side: THREE.DoubleSide,
-        flatShading: false,
       })
 
       const mesh = new THREE.Mesh(geometry, material)
@@ -290,6 +395,7 @@ export class MuJoCoRenderer {
         boneBindQuat,
         vertBoneId,
         vertBoneWeight,
+        bindNormals,
       })
     }
 
@@ -364,20 +470,27 @@ export class MuJoCoRenderer {
     const vertexLocal = new THREE.Vector3()
     const vertexWorld = new THREE.Vector3()
     const vertexResult = new THREE.Vector3()
+    const normalBind = new THREE.Vector3()
+    const normalLocal = new THREE.Vector3()
+    const normalWorld = new THREE.Vector3()
+    const normalResult = new THREE.Vector3()
 
     for (const skin of this.skins) {
       const positions = skin.geometry.attributes.position.array as Float32Array
-      const { boneBodyIds, boneBindPos, boneBindQuat, vertBoneId, vertBoneWeight, vertexCount } = skin
+      const normals = skin.geometry.attributes.normal.array as Float32Array
+      const { boneBodyIds, boneBindPos, boneBindQuat, vertBoneId, vertBoneWeight, vertexCount, bindNormals } = skin
 
       // Transform each vertex
       const skinVert = toFloat32Array(this.model.skin_vert)
       for (let v = 0; v < vertexCount; v++) {
         vertexResult.set(0, 0, 0)
+        normalResult.set(0, 0, 0)
         let totalWeight = 0
 
-        // Get original vertex position in bind pose
+        // Get original vertex position and normal in bind pose
         const vIdx = skin.vertexStart + v
         vertexBind.set(skinVert[vIdx * 3], skinVert[vIdx * 3 + 1], skinVert[vIdx * 3 + 2])
+        normalBind.set(bindNormals[v * 3], bindNormals[v * 3 + 1], bindNormals[v * 3 + 2])
 
         // Accumulate weighted bone transforms
         for (let slot = 0; slot < 4; slot++) {
@@ -404,26 +517,38 @@ export class MuJoCoRenderer {
           vertexLocal.applyQuaternion(bindQuat.clone().invert())
           vertexWorld.copy(vertexLocal).applyQuaternion(currentQuat).add(currentPos)
 
+          // Transform normal (rotation only, no translation)
+          // n_local = bindQuat^-1 * n_bind
+          // n_world = currentQuat * n_local
+          normalLocal.copy(normalBind).applyQuaternion(bindQuat.clone().invert())
+          normalWorld.copy(normalLocal).applyQuaternion(currentQuat)
+
           vertexResult.addScaledVector(vertexWorld, weight)
+          normalResult.addScaledVector(normalWorld, weight)
           totalWeight += weight
         }
 
         // Normalize by total weight (handle edge case)
         if (totalWeight > 0.0001) {
           vertexResult.divideScalar(totalWeight)
+          normalResult.normalize() // Normals should be normalized, not scaled
         } else {
           vertexResult.copy(vertexBind)
+          normalResult.copy(normalBind)
         }
 
-        // Update position buffer
+        // Update position and normal buffers
         positions[v * 3] = vertexResult.x
         positions[v * 3 + 1] = vertexResult.y
         positions[v * 3 + 2] = vertexResult.z
+        normals[v * 3] = normalResult.x
+        normals[v * 3 + 1] = normalResult.y
+        normals[v * 3 + 2] = normalResult.z
       }
 
       // Mark geometry for update
       skin.geometry.attributes.position.needsUpdate = true
-      skin.geometry.computeVertexNormals()
+      skin.geometry.attributes.normal.needsUpdate = true
     }
   }
 
