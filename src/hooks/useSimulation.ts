@@ -1,8 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import type { InferenceSession } from 'onnxruntime-web'
 import type { MainModule, MjModel, MjData, MotionClip, SimulationState } from '../types'
+import type { AnimalConfig } from '../types/animal-config'
 import { runInference, extractAction } from './useONNX'
-import { buildObservation, OBS_CONFIG } from '../lib/observation'
+import { buildObservation } from '../lib/observation'
 
 interface UseSimulationProps {
   mujoco: MainModule | null
@@ -14,12 +15,8 @@ interface UseSimulationProps {
   isPlaying: boolean
   speed: number
   isReady: boolean
+  config: AnimalConfig
 }
-
-// Control timestep in seconds (100 Hz) - matches training checkpoint
-const CTRL_DT = 0.01
-// Mocap frame rate (50 Hz)
-const MOCAP_HZ = 50
 
 export function useSimulation({
   mujoco,
@@ -31,12 +28,13 @@ export function useSimulation({
   isPlaying,
   speed,
   isReady,
+  config,
 }: UseSimulationProps): SimulationState {
   const [currentFrame, setCurrentFrame] = useState(0)
   const animationRef = useRef<number | null>(null)
   const lastTimeRef = useRef<number>(0)
   const accumulatedTimeRef = useRef<number>(0)
-  const prevActionRef = useRef<Float32Array>(new Float32Array(OBS_CONFIG.actionSize))
+  const prevActionRef = useRef<Float32Array>(new Float32Array(config.action.size))
 
   // Reset simulation to initial state
   const reset = useCallback(() => {
@@ -73,10 +71,10 @@ export function useSimulation({
     data.time = 0
     setCurrentFrame(0)
     accumulatedTimeRef.current = 0
-    prevActionRef.current = new Float32Array(OBS_CONFIG.actionSize)
+    prevActionRef.current = new Float32Array(config.action.size)
 
     console.log('Simulation reset to clip:', clip.name)
-  }, [mujoco, model, data, clips, selectedClip])
+  }, [mujoco, model, data, clips, selectedClip, config.action.size])
 
   // Reset when clip changes
   useEffect(() => {
@@ -105,10 +103,10 @@ export function useSimulation({
 
       // Calculate current reference frame
       const frameTime = accumulatedTimeRef.current
-      const newFrame = Math.floor(frameTime * MOCAP_HZ)
+      const newFrame = Math.floor(frameTime * config.timing.mocapHz)
 
       // Check if we've reached the end of the clip
-      if (newFrame >= clip.num_frames - OBS_CONFIG.referenceLength) {
+      if (newFrame >= clip.num_frames - config.obs.referenceLength) {
         // Loop back to start
         accumulatedTimeRef.current = 0
         setCurrentFrame(0)
@@ -127,14 +125,15 @@ export function useSimulation({
           data,
           clip,
           newFrame,
-          prevActionRef.current
+          prevActionRef.current,
+          config
         )
 
         // Run inference (ONNX model normalizes input internally)
         const logits = await runInference(session, obs)
 
         // Extract action (tanh of mean)
-        const action = extractAction(logits)
+        const action = extractAction(logits, config.action.size)
 
         // Apply action to MuJoCo control
         // MuJoCo WASM exposes ctrl as a Float64Array view
@@ -149,7 +148,7 @@ export function useSimulation({
         // Step the simulation
         // Run multiple physics substeps per control step
         const modelOpt = (model as unknown as { opt: { timestep: number } }).opt
-        const numSubsteps = modelOpt?.timestep ? Math.round(CTRL_DT / modelOpt.timestep) : 5
+        const numSubsteps = modelOpt?.timestep ? Math.round(config.timing.ctrlDt / modelOpt.timestep) : 5
         for (let i = 0; i < numSubsteps; i++) {
           mujoco.mj_step(model, data)
         }
@@ -157,7 +156,7 @@ export function useSimulation({
         // Debug logging
         if ((globalThis as unknown as Record<string, boolean>).__SIM_DEBUG__) {
           const xpos = data.xpos as unknown as Float64Array
-          const torsoZ = xpos[3 * 3 + 2]
+          const torsoZ = xpos[config.body.torsoIndex * 3 + 2]
 
           // Track data in global arrays
           const heights = ((globalThis as unknown as Record<string, number[]>).__HEIGHTS__ ||= [])
@@ -191,7 +190,7 @@ export function useSimulation({
         animationRef.current = null
       }
     }
-  }, [isReady, isPlaying, mujoco, model, data, session, clips, selectedClip, speed, reset])
+  }, [isReady, isPlaying, mujoco, model, data, session, clips, selectedClip, speed, reset, config])
 
   return {
     currentFrame,

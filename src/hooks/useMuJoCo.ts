@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import type { MainModule, MjModel, MjData } from '../types'
+import type { AnimalConfig } from '../types/animal-config'
 
 interface UseMuJoCoResult {
   mujoco: MainModule | null
@@ -9,15 +10,24 @@ interface UseMuJoCoResult {
   error: string | null
 }
 
-export function useMuJoCo(): UseMuJoCoResult {
+export function useMuJoCo(config: AnimalConfig): UseMuJoCoResult {
   const [mujoco, setMujoco] = useState<MainModule | null>(null)
   const [model, setModel] = useState<MjModel | null>(null)
   const [data, setData] = useState<MjData | null>(null)
   const [isReady, setIsReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const initRef = useRef(false)
+  const configIdRef = useRef(config.id)
 
   useEffect(() => {
+    // Reset if config changed
+    if (configIdRef.current !== config.id) {
+      configIdRef.current = config.id
+      initRef.current = false
+      setIsReady(false)
+      setError(null)
+    }
+
     if (initRef.current) return
     initRef.current = true
 
@@ -28,18 +38,22 @@ export function useMuJoCo(): UseMuJoCoResult {
         const mj = await mujocoModule.default() as MainModule
         setMujoco(mj)
 
-        // Load scaled rodent model (includes arena, scaled to 0.9 to match training)
-        const rodentResponse = await fetch('/models/rodent_scaled.xml')
-        const rodentXml = await rodentResponse.text()
-        mj.FS.writeFile('/rodent_scaled.xml', rodentXml)
+        // Load model XML
+        const modelResponse = await fetch(config.assets.modelPath)
+        const modelXml = await modelResponse.text()
+        const modelFilename = config.assets.modelPath.split('/').pop() || 'model.xml'
+        mj.FS.writeFile(`/${modelFilename}`, modelXml)
 
-        // Load skin file if referenced by the model
-        const skinResponse = await fetch('/models/rodent_walker_skin.skn')
-        const skinData = await skinResponse.arrayBuffer()
-        mj.FS.writeFile('/rodent_walker_skin.skn', new Uint8Array(skinData))
+        // Load skin file if specified
+        if (config.assets.skinPath) {
+          const skinResponse = await fetch(config.assets.skinPath)
+          const skinData = await skinResponse.arrayBuffer()
+          const skinFilename = config.assets.skinPath.split('/').pop() || 'skin.skn'
+          mj.FS.writeFile(`/${skinFilename}`, new Uint8Array(skinData))
+        }
 
-        // Load the model - rodent_scaled.xml includes arena
-        const mjModel = mj.MjModel.loadFromXML('/rodent_scaled.xml')
+        // Load the model
+        const mjModel = mj.MjModel.loadFromXML(`/${modelFilename}`)
         setModel(mjModel)
 
         // Create simulation data
@@ -51,7 +65,7 @@ export function useMuJoCo(): UseMuJoCoResult {
         mj.mj_forward(mjModel, mjData)
 
         setIsReady(true)
-        console.log('MuJoCo initialized successfully')
+        console.log(`MuJoCo initialized for ${config.name}`)
         console.log(`  nq=${mjModel.nq}, nv=${mjModel.nv}, nu=${mjModel.nu}`)
         console.log(`  nbody=${mjModel.nbody}, ngeom=${mjModel.ngeom}`)
       } catch (e) {
@@ -61,7 +75,7 @@ export function useMuJoCo(): UseMuJoCoResult {
     }
 
     init()
-  }, [])
+  }, [config])
 
   return { mujoco, model, data, isReady, error }
 }

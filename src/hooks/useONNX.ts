@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import * as ort from 'onnxruntime-web'
+import type { AnimalConfig } from '../types/animal-config'
 
 interface UseONNXResult {
   session: ort.InferenceSession | null
@@ -7,25 +8,33 @@ interface UseONNXResult {
   error: string | null
 }
 
-export function useONNX(): UseONNXResult {
+export function useONNX(config: AnimalConfig): UseONNXResult {
   const [session, setSession] = useState<ort.InferenceSession | null>(null)
   const [isReady, setIsReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const initRef = useRef(false)
+  const configIdRef = useRef(config.id)
 
   useEffect(() => {
+    // Reset if config changed
+    if (configIdRef.current !== config.id) {
+      configIdRef.current = config.id
+      initRef.current = false
+      setIsReady(false)
+      setError(null)
+    }
+
     if (initRef.current) return
     initRef.current = true
 
     async function init() {
       try {
         // Configure ONNX Runtime for WASM backend
-        // Use CDN for production, local for development
         ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.23.2/dist/'
 
         // Create inference session
         const onnxSession = await ort.InferenceSession.create(
-          '/nn/intention_network.onnx?v=3',
+          config.assets.onnxPath,
           {
             executionProviders: ['wasm'],
             graphOptimizationLevel: 'all',
@@ -35,7 +44,7 @@ export function useONNX(): UseONNXResult {
         setSession(onnxSession)
         setIsReady(true)
 
-        console.log('ONNX Runtime initialized successfully')
+        console.log(`ONNX Runtime initialized for ${config.name}`)
         console.log('  Input names:', onnxSession.inputNames)
         console.log('  Output names:', onnxSession.outputNames)
       } catch (e) {
@@ -45,15 +54,15 @@ export function useONNX(): UseONNXResult {
     }
 
     init()
-  }, [])
+  }, [config])
 
   return { session, isReady, error }
 }
 
 /**
  * Run inference on the policy network.
- * Input: 917-dim observation vector
- * Output: 76-dim logits (38 action means + 38 action log_stds)
+ * Input: observation vector (size from config.obs.totalSize)
+ * Output: logits (action means + action log_stds)
  */
 export async function runInference(
   session: ort.InferenceSession,
@@ -68,10 +77,9 @@ export async function runInference(
 
 /**
  * Extract action from network output.
- * Takes the first 38 dims (mean) and applies tanh.
+ * Takes the first actionSize dims (mean) and applies tanh.
  */
-export function extractAction(logits: Float32Array): Float32Array {
-  const actionSize = 38
+export function extractAction(logits: Float32Array, actionSize: number): Float32Array {
   const action = new Float32Array(actionSize)
   for (let i = 0; i < actionSize; i++) {
     action[i] = Math.tanh(logits[i])

@@ -1,60 +1,6 @@
 import type { MjModel, MjData, MainModule, MotionClip } from '../types'
-
-/**
- * Observation dimensions from the trained model.
- * Total: 917 = 640 (reference) + 277 (proprioceptive)
- *
- * Reference observation (640 dims):
- *   - root_targets: 5 frames × 3 = 15
- *   - quat_targets: 5 frames × 4 = 20
- *   - joint_targets: 5 frames × 67 = 335
- *   - body_targets: 5 frames × 18 bodies × 3 = 270
- *
- * Proprioceptive observation (277 dims):
- *   - joint_angles: 67 (nq - 7)
- *   - joint_ang_vels: 67 (nv - 6)
- *   - qfrc_actuator: 73 (nv)
- *   - body_height: 1
- *   - world_zaxis: 3
- *   - appendages_pos: 15 (5 end effectors × 3)
- *   - prev_action: 38
- *   - kinematic_sensors: 9 (accelerometer 3 + velocimeter 3 + gyro 3)
- *   - touch_sensors: 4 (palm_L, palm_R, sole_L, sole_R)
- */
-export const OBS_CONFIG = {
-  totalSize: 917,
-  referenceObsSize: 640,
-  proprioceptiveObsSize: 277,
-  referenceLength: 5, // Number of future reference frames
-  actionSize: 38,
-  numJoints: 67,  // nq - 7
-  numBodies: 18,  // Bodies tracked in reference
-}
-
-// Body indices in REFERENCE xpos array (from reference clips h5 file)
-// BODIES = ["torso", "pelvis", "upper_leg_L", "lower_leg_L", "foot_L",
-//           "upper_leg_R", "lower_leg_R", "foot_R", "skull", "jaw",
-//           "scapula_L", "upper_arm_L", "lower_arm_L", "finger_L",
-//           "scapula_R", "upper_arm_R", "lower_arm_R", "finger_R"]
-const BODY_INDICES_REF = [2, 9, 10, 11, 12, 14, 15, 16, 55, 56, 57, 58, 59, 61, 62, 63, 64, 66]
-
-// Body indices in MuJoCo MODEL xpos array (offset by +1 due to added floor body)
-// Model body order: world(0), floor(1), walker(2), torso(3), ...
-const BODY_INDICES_MODEL = BODY_INDICES_REF.map(i => i + 1)
-
-// End effector indices in reference xpos array
-// END_EFFECTORS = ["lower_arm_R", "lower_arm_L", "foot_R", "foot_L", "skull"]
-const END_EFFECTOR_INDICES_REF = [64, 59, 16, 12, 55]
-const END_EFFECTOR_INDICES_MODEL = END_EFFECTOR_INDICES_REF.map(i => i + 1)
-
-// Torso index in model (reference index + 1 due to floor body)
-const TORSO_INDEX_MODEL = 3
-
-// Walker (root body) index in model
-const WALKER_INDEX_MODEL = 2
-
-// Note: Observation normalization is handled inside the ONNX model.
-// The model includes mean/std as initializers and normalizes internally.
+import type { AnimalConfig } from '../types/animal-config'
+import { getBodyIndicesModel, getEndEffectorIndicesModel } from '../types/animal-config'
 
 /**
  * Helper to convert MuJoCo array property to typed array.
@@ -117,13 +63,15 @@ function relativeQuat(q1: number[], q2: number[]): number[] {
  * Build the observation vector for the policy network.
  *
  * The observation consists of:
- * 1. Reference observation (640 dims): Future trajectory targets in egocentric frame
- *    - root_targets: 5 × 3 = 15 (all frames together)
- *    - quat_targets: 5 × 4 = 20 (all frames together)
- *    - joint_targets: 5 × 67 = 335 (all frames together)
- *    - body_targets: 18 × 5 × 3 = 270 (bodies outer, frames inner)
- * 2. Proprioceptive observation (277 dims): Current robot state + sensors
+ * 1. Reference observation: Future trajectory targets in egocentric frame
+ *    - root_targets: referenceLength × 3 (all frames together)
+ *    - quat_targets: referenceLength × 4 (all frames together)
+ *    - joint_targets: referenceLength × numJoints (all frames together)
+ *    - body_targets: numBodies × referenceLength × 3 (bodies outer, frames inner)
+ * 2. Proprioceptive observation: Current robot state + sensors
  *    - Order: joints, vels, forces, height, zaxis, appendages, kinematic, touch, prev_action
+ *
+ * @param config Animal configuration with all dimensions and indices
  */
 export function buildObservation(
   mujoco: MainModule,
@@ -131,9 +79,15 @@ export function buildObservation(
   data: MjData,
   clip: MotionClip,
   currentFrame: number,
-  prevAction: Float32Array
+  prevAction: Float32Array,
+  config: AnimalConfig
 ): Float32Array {
-  const obs = new Float32Array(OBS_CONFIG.totalSize)
+  const obs = new Float32Array(config.obs.totalSize)
+
+  // Derive model indices from config
+  const bodyIndicesRef = config.body.bodyIndicesRef
+  const bodyIndicesModel = getBodyIndicesModel(config)
+  const endEffectorIndicesModel = getEndEffectorIndicesModel(config)
 
   // Get current state from MuJoCo data
   const qpos = getFloatArray(mujoco, data, 'qpos', model.nq)
@@ -142,13 +96,13 @@ export function buildObservation(
   const xpos = getFloatArray(mujoco, data, 'xpos', model.nbody * 3)
   const xmat = getFloatArray(mujoco, data, 'xmat', model.nbody * 9)
 
-  // Root position and quaternion (first 7 elements of qpos)
+  // Root position and quaternion (first 7 elements of qpos for floating base)
   const rootPos = [qpos[0], qpos[1], qpos[2]]
   const rootQuat = [qpos[3], qpos[4], qpos[5], qpos[6]]
 
   // Get current body positions for body targets (using MODEL indices)
   const curBodyXpos: number[][] = []
-  for (const bodyIdx of BODY_INDICES_MODEL) {
+  for (const bodyIdx of bodyIndicesModel) {
     curBodyXpos.push([
       xpos[bodyIdx * 3],
       xpos[bodyIdx * 3 + 1],
@@ -156,14 +110,14 @@ export function buildObservation(
     ])
   }
 
-  // === Reference Observation (640 dims) ===
+  // === Reference Observation ===
   // Training env flattens as: all roots, all quats, all joints, all bodies
-  // Body array is (18, 5, 3) - iterate bodies first, then frames
+  // Body array is (numBodies, referenceLength, 3) - iterate bodies first, then frames
 
   let refIdx = 0
 
-  // Root targets: 5 frames × 3 coords = 15
-  for (let f = 0; f < OBS_CONFIG.referenceLength; f++) {
+  // Root targets: referenceLength frames × 3 coords
+  for (let f = 0; f < config.obs.referenceLength; f++) {
     const frameIdx = Math.min(currentFrame + 1 + f, clip.num_frames - 1)
     const refQpos = clip.qpos[frameIdx]
 
@@ -179,8 +133,8 @@ export function buildObservation(
     obs[refIdx++] = egoPos[2]
   }
 
-  // Quat targets: 5 frames × 4 coords = 20
-  for (let f = 0; f < OBS_CONFIG.referenceLength; f++) {
+  // Quat targets: referenceLength frames × 4 coords
+  for (let f = 0; f < config.obs.referenceLength; f++) {
     const frameIdx = Math.min(currentFrame + 1 + f, clip.num_frames - 1)
     const refQpos = clip.qpos[frameIdx]
 
@@ -192,23 +146,23 @@ export function buildObservation(
     obs[refIdx++] = relQuat[3]
   }
 
-  // Joint targets: 5 frames × 67 joints = 335
-  for (let f = 0; f < OBS_CONFIG.referenceLength; f++) {
+  // Joint targets: referenceLength frames × numJoints joints
+  for (let f = 0; f < config.obs.referenceLength; f++) {
     const frameIdx = Math.min(currentFrame + 1 + f, clip.num_frames - 1)
     const refQpos = clip.qpos[frameIdx]
 
-    for (let j = 0; j < OBS_CONFIG.numJoints; j++) {
-      const refJoint = refQpos[7 + j]
-      const curJoint = qpos[7 + j]
+    for (let j = 0; j < config.body.numJoints; j++) {
+      const refJoint = refQpos[config.body.rootDOFs + j]
+      const curJoint = qpos[config.body.rootDOFs + j]
       obs[refIdx++] = refJoint - curJoint
     }
   }
 
-  // Body targets: 18 bodies × 5 frames × 3 coords = 270
+  // Body targets: numBodies bodies × referenceLength frames × 3 coords
   // IMPORTANT: Iterate bodies first, then frames (matches training env flattening)
-  for (let b = 0; b < BODY_INDICES_REF.length; b++) {
-    const refBodyIdx = BODY_INDICES_REF[b]
-    for (let f = 0; f < OBS_CONFIG.referenceLength; f++) {
+  for (let b = 0; b < bodyIndicesRef.length; b++) {
+    const refBodyIdx = bodyIndicesRef[b]
+    for (let f = 0; f < config.obs.referenceLength; f++) {
       const frameIdx = Math.min(currentFrame + 1 + f, clip.num_frames - 1)
       const refXpos = clip.xpos[frameIdx]
 
@@ -226,50 +180,47 @@ export function buildObservation(
     }
   }
 
-  // === Proprioceptive Observation (277 dims) ===
-  let propIdx = OBS_CONFIG.referenceObsSize
+  // === Proprioceptive Observation ===
+  let propIdx = config.obs.referenceObsSize
 
-  // Joint angles (excluding root 7 dofs): 67 values
-  for (let i = 7; i < model.nq; i++) {
+  // Joint angles (excluding root DOFs): numJoints values
+  for (let i = config.body.rootDOFs; i < model.nq; i++) {
     obs[propIdx++] = qpos[i]
   }
 
-  // Joint velocities (excluding root 6 dofs): 67 values
-  for (let i = 6; i < model.nv; i++) {
+  // Joint velocities (excluding root vel DOFs): numJoints values
+  for (let i = config.body.rootVelDOFs; i < model.nv; i++) {
     obs[propIdx++] = qvel[i]
   }
 
-  // Actuator forces (qfrc_actuator): 73 values (full nv)
-  // Python: data.qfrc_actuator (NOT data.ctrl!)
+  // Actuator forces (qfrc_actuator): nv values
   for (let i = 0; i < model.nv; i++) {
     obs[propIdx++] = qfrcActuator[i]
   }
 
   // Body height (torso z position): 1 value
-  const torsoZ = xpos[TORSO_INDEX_MODEL * 3 + 2]
+  const torsoZ = xpos[config.body.torsoIndex * 3 + 2]
   obs[propIdx++] = torsoZ
 
   // World z-axis in body frame (from root body rotation matrix): 3 values
-  // Python: self.root_body(data).xmat.flatten()[6:]
-  obs[propIdx++] = xmat[WALKER_INDEX_MODEL * 9 + 6]
-  obs[propIdx++] = xmat[WALKER_INDEX_MODEL * 9 + 7]
-  obs[propIdx++] = xmat[WALKER_INDEX_MODEL * 9 + 8]
+  obs[propIdx++] = xmat[config.body.walkerIndex * 9 + 6]
+  obs[propIdx++] = xmat[config.body.walkerIndex * 9 + 7]
+  obs[propIdx++] = xmat[config.body.walkerIndex * 9 + 8]
 
-  // Appendages positions (egocentric relative to torso): 5 × 3 = 15 values
-  // Python: uses torso.xmat for rotation, not root_quat
+  // Appendages positions (egocentric relative to torso): endEffectors × 3 values
   const torsoPos = [
-    xpos[TORSO_INDEX_MODEL * 3],
-    xpos[TORSO_INDEX_MODEL * 3 + 1],
-    xpos[TORSO_INDEX_MODEL * 3 + 2],
+    xpos[config.body.torsoIndex * 3],
+    xpos[config.body.torsoIndex * 3 + 1],
+    xpos[config.body.torsoIndex * 3 + 2],
   ]
   // Get torso rotation matrix for egocentric transform
   const torsoMat = [
-    xmat[TORSO_INDEX_MODEL * 9 + 0], xmat[TORSO_INDEX_MODEL * 9 + 1], xmat[TORSO_INDEX_MODEL * 9 + 2],
-    xmat[TORSO_INDEX_MODEL * 9 + 3], xmat[TORSO_INDEX_MODEL * 9 + 4], xmat[TORSO_INDEX_MODEL * 9 + 5],
-    xmat[TORSO_INDEX_MODEL * 9 + 6], xmat[TORSO_INDEX_MODEL * 9 + 7], xmat[TORSO_INDEX_MODEL * 9 + 8],
+    xmat[config.body.torsoIndex * 9 + 0], xmat[config.body.torsoIndex * 9 + 1], xmat[config.body.torsoIndex * 9 + 2],
+    xmat[config.body.torsoIndex * 9 + 3], xmat[config.body.torsoIndex * 9 + 4], xmat[config.body.torsoIndex * 9 + 5],
+    xmat[config.body.torsoIndex * 9 + 6], xmat[config.body.torsoIndex * 9 + 7], xmat[config.body.torsoIndex * 9 + 8],
   ]
 
-  for (const bodyIdx of END_EFFECTOR_INDICES_MODEL) {
+  for (const bodyIdx of endEffectorIndicesModel) {
     const bodyPos = [
       xpos[bodyIdx * 3],
       xpos[bodyIdx * 3 + 1],
@@ -280,8 +231,7 @@ export function buildObservation(
       bodyPos[1] - torsoPos[1],
       bodyPos[2] - torsoPos[2],
     ]
-    // Python: jp.dot(global_xpos - torso.xpos, torso.xmat)
-    // This is matrix-vector multiply: rel @ torso_mat (row-major)
+    // Matrix-vector multiply: rel @ torso_mat (row-major)
     const ego = [
       rel[0] * torsoMat[0] + rel[1] * torsoMat[3] + rel[2] * torsoMat[6],
       rel[0] * torsoMat[1] + rel[1] * torsoMat[4] + rel[2] * torsoMat[7],
@@ -292,38 +242,38 @@ export function buildObservation(
     obs[propIdx++] = ego[2]
   }
 
-  // Kinematic sensors: accelerometer(3) + velocimeter(3) + gyro(3) = 9 values
-  // Sensor layout: accelerometer[0-2], velocimeter[3-5], gyro[6-8]
-  // NOTE: Training order is sensors BEFORE prev_action
-  const sensordata = getFloatArray(mujoco, data, 'sensordata', 16)
-  for (let i = 0; i < 9; i++) {
+  // Kinematic sensors: accelerometer + velocimeter + gyro
+  const sensordata = getFloatArray(mujoco, data, 'sensordata', config.sensors.totalCount)
+
+  // Accelerometer
+  for (let i = config.sensors.kinematic.accelerometer[0]; i < config.sensors.kinematic.accelerometer[1]; i++) {
+    obs[propIdx++] = sensordata[i] || 0
+  }
+  // Velocimeter
+  for (let i = config.sensors.kinematic.velocimeter[0]; i < config.sensors.kinematic.velocimeter[1]; i++) {
+    obs[propIdx++] = sensordata[i] || 0
+  }
+  // Gyro
+  for (let i = config.sensors.kinematic.gyro[0]; i < config.sensors.kinematic.gyro[1]; i++) {
     obs[propIdx++] = sensordata[i] || 0
   }
 
-  // Touch sensors: palm_L, palm_R, sole_L, sole_R = 4 values
-  // Sensor layout: palm_L[9], palm_R[10], sole_L[11], sole_R[12]
-  for (let i = 9; i < 13; i++) {
-    obs[propIdx++] = sensordata[i] || 0
+  // Touch sensors
+  for (const touch of config.sensors.touch) {
+    obs[propIdx++] = sensordata[touch.index] || 0
   }
 
-  // Previous action: 38 values (LAST in training order)
-  for (let i = 0; i < OBS_CONFIG.actionSize; i++) {
+  // Previous action: actionSize values (LAST in training order)
+  for (let i = 0; i < config.action.size; i++) {
     obs[propIdx++] = prevAction[i]
   }
 
   // Debug logging (only on first frame)
   if (currentFrame === 0 && (globalThis as unknown as Record<string, boolean>).__OBS_DEBUG__) {
-    console.log('=== TypeScript Observation Debug ===')
+    console.log(`=== ${config.name} Observation Debug ===`)
     console.log('rootPos:', rootPos)
     console.log('rootQuat:', rootQuat)
     console.log('root_targets (obs[0:15]):', Array.from(obs.slice(0, 15)))
-    console.log('quat_targets (obs[15:35]):', Array.from(obs.slice(15, 35)))
-    console.log('torsoHeight (obs[847]):', obs[847])
-    console.log('worldZAxis (obs[848:851]):', [obs[848], obs[849], obs[850]])
-    console.log('appendages (obs[851:866]):', Array.from(obs.slice(851, 866)))
-    console.log('kinematic_sensors (obs[866:875]):', Array.from(obs.slice(866, 875)))
-    console.log('touch_sensors (obs[875:879]):', Array.from(obs.slice(875, 879)))
-    console.log('prev_action (obs[879:917]):', Array.from(obs.slice(879, 917)))
     console.log('obsLength:', obs.length)
     console.log('obsSum:', Array.from(obs).reduce((a, b) => a + b, 0))
   }
