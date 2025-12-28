@@ -2,7 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import type { InferenceSession } from 'onnxruntime-web'
 import type { MainModule, MjModel, MjData, MotionClip, SimulationState } from '../types'
 import type { AnimalConfig } from '../types/animal-config'
-import { runInference, extractAction } from './useONNX'
+import { runInference, extractActionInto } from './useONNX'
 import { buildObservation } from '../lib/observation'
 
 interface UseSimulationProps {
@@ -71,7 +71,7 @@ export function useSimulation({
     data.time = 0
     setCurrentFrame(0)
     accumulatedTimeRef.current = 0
-    prevActionRef.current = new Float32Array(config.action.size)
+    prevActionRef.current.fill(0)  // Zero the buffer instead of allocating new
 
     console.log('Simulation reset to clip:', clip.name)
   }, [mujoco, model, data, clips, selectedClip, config.action.size])
@@ -132,18 +132,16 @@ export function useSimulation({
         // Run inference (ONNX model normalizes input internally)
         const logits = await runInference(session, obs)
 
-        // Extract action (tanh of mean)
-        const action = extractAction(logits, config.action.size)
+        // Extract action (tanh of mean) into pre-allocated buffer
+        extractActionInto(prevActionRef.current, logits)
 
         // Apply action to MuJoCo control
         // MuJoCo WASM exposes ctrl as a Float64Array view
         const ctrl = data.ctrl as unknown as Float64Array
+        const action = prevActionRef.current
         for (let i = 0; i < model.nu; i++) {
           ctrl[i] = action[i]
         }
-
-        // Store action for next observation
-        prevActionRef.current = action
 
         // Step the simulation
         // Run multiple physics substeps per control step

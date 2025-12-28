@@ -76,13 +76,12 @@ export async function runInference(
 }
 
 /**
- * Extract action from network output.
+ * Extract action from network output into pre-allocated buffer.
  * Takes the first actionSize dims (mean) and applies tanh.
+ * Writes result to `out` buffer to avoid per-frame allocations.
  */
-export function extractAction(logits: Float32Array, actionSize: number): Float32Array {
-  const action = new Float32Array(actionSize)
-  for (let i = 0; i < actionSize; i++) {
-    action[i] = Math.tanh(logits[i])
+export function extractActionInto(out: Float32Array, logits: Float32Array): void {
+  for (let i = 0; i < out.length; i++) {
+    out[i] = Math.tanh(logits[i])
   }
-  return action
 }

@@ -58,6 +58,8 @@ export class MuJoCoRenderer {
   private skins: SkinInfo[] = []
   private model: MjModel
   private scene: THREE.Scene
+  // Pre-allocated for sync() - avoid per-frame allocations
+  private mat4 = new THREE.Matrix4()
 
   constructor(_mujoco: MainModule, model: MjModel, scene: THREE.Scene) {
     this.model = model
@@ -408,9 +410,9 @@ export class MuJoCoRenderer {
   private debugCount = 0
 
   sync(data: MjData): void {
-    // Get geom world transforms directly from simulation
-    const geomXpos = toFloat32Array(data.geom_xpos)
-    const geomXmat = toFloat32Array(data.geom_xmat)
+    // Access geom transforms directly (avoid typed array conversion)
+    const geomXpos = (data as unknown as Record<string, Float64Array>).geom_xpos
+    const geomXmat = (data as unknown as Record<string, Float64Array>).geom_xmat
 
     // Debug: log first few syncs
     if (this.debugCount < 3) {
@@ -424,7 +426,8 @@ export class MuJoCoRenderer {
       this.debugCount++
     }
 
-    const mat4 = new THREE.Matrix4()
+    // Reuse instance mat4 to avoid per-frame allocation
+    const mat4 = this.mat4
 
     for (const geom of this.geoms) {
       const { mesh, geomId } = geom
@@ -454,34 +457,51 @@ export class MuJoCoRenderer {
     this.updateSkins(data)
   }
 
+  // Pre-allocated temporaries for skin updates (avoid per-frame allocations)
+  private skinBindPos = new THREE.Vector3()
+  private skinBindQuat = new THREE.Quaternion()
+  private skinBindQuatInv = new THREE.Quaternion()
+  private skinCurrentPos = new THREE.Vector3()
+  private skinCurrentQuat = new THREE.Quaternion()
+  private skinVertexBind = new THREE.Vector3()
+  private skinVertexLocal = new THREE.Vector3()
+  private skinVertexWorld = new THREE.Vector3()
+  private skinVertexResult = new THREE.Vector3()
+  private skinNormalBind = new THREE.Vector3()
+  private skinNormalLocal = new THREE.Vector3()
+  private skinNormalWorld = new THREE.Vector3()
+  private skinNormalResult = new THREE.Vector3()
+
   /**
    * Update skin mesh vertices based on bone transforms.
    */
   private updateSkins(data: MjData): void {
-    const bodyXpos = toFloat32Array(data.xpos)
-    const bodyXquat = toFloat32Array(data.xquat)
+    // Access body transforms directly (avoid typed array conversion)
+    const bodyXpos = (data as unknown as Record<string, Float64Array>).xpos
+    const bodyXquat = (data as unknown as Record<string, Float64Array>).xquat
 
-    // Temporary vectors for skinning calculations
-    const bindPos = new THREE.Vector3()
-    const bindQuat = new THREE.Quaternion()
-    const currentPos = new THREE.Vector3()
-    const currentQuat = new THREE.Quaternion()
-    const vertexBind = new THREE.Vector3()
-    const vertexLocal = new THREE.Vector3()
-    const vertexWorld = new THREE.Vector3()
-    const vertexResult = new THREE.Vector3()
-    const normalBind = new THREE.Vector3()
-    const normalLocal = new THREE.Vector3()
-    const normalWorld = new THREE.Vector3()
-    const normalResult = new THREE.Vector3()
+    // Reuse pre-allocated temporaries
+    const bindPos = this.skinBindPos
+    const bindQuat = this.skinBindQuat
+    const bindQuatInv = this.skinBindQuatInv
+    const currentPos = this.skinCurrentPos
+    const currentQuat = this.skinCurrentQuat
+    const vertexBind = this.skinVertexBind
+    const vertexLocal = this.skinVertexLocal
+    const vertexWorld = this.skinVertexWorld
+    const vertexResult = this.skinVertexResult
+    const normalBind = this.skinNormalBind
+    const normalLocal = this.skinNormalLocal
+    const normalWorld = this.skinNormalWorld
+    const normalResult = this.skinNormalResult
+
+    // Access skin vertices once (model data doesn't change per frame)
+    const skinVert = (this.model as unknown as Record<string, Float64Array>).skin_vert
 
     for (const skin of this.skins) {
       const positions = skin.geometry.attributes.position.array as Float32Array
       const normals = skin.geometry.attributes.normal.array as Float32Array
       const { boneBodyIds, boneBindPos, boneBindQuat, vertBoneId, vertBoneWeight, vertexCount, bindNormals } = skin
-
-      // Transform each vertex
-      const skinVert = toFloat32Array(this.model.skin_vert)
       for (let v = 0; v < vertexCount; v++) {
         vertexResult.set(0, 0, 0)
         normalResult.set(0, 0, 0)
@@ -513,14 +533,15 @@ export class MuJoCoRenderer {
           // Transform vertex from bind pose to local bone space, then to world
           // v_local = bindQuat^-1 * (v_bind - bindPos)
           // v_world = currentQuat * v_local + currentPos
+          bindQuatInv.copy(bindQuat).invert()
           vertexLocal.copy(vertexBind).sub(bindPos)
-          vertexLocal.applyQuaternion(bindQuat.clone().invert())
+          vertexLocal.applyQuaternion(bindQuatInv)
           vertexWorld.copy(vertexLocal).applyQuaternion(currentQuat).add(currentPos)
 
           // Transform normal (rotation only, no translation)
           // n_local = bindQuat^-1 * n_bind
           // n_world = currentQuat * n_local
-          normalLocal.copy(normalBind).applyQuaternion(bindQuat.clone().invert())
+          normalLocal.copy(normalBind).applyQuaternion(bindQuatInv)
           normalWorld.copy(normalLocal).applyQuaternion(currentQuat)
 
           vertexResult.addScaledVector(vertexWorld, weight)
