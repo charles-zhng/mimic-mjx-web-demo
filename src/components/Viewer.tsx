@@ -8,10 +8,11 @@ interface ViewerProps {
   mujoco: MainModule | null
   model: MjModel | null
   data: MjData | null
+  ghostData: MjData | null
   isReady: boolean
 }
 
-export default function Viewer({ mujoco, model, data, isReady }: ViewerProps) {
+export default function Viewer({ mujoco, model, data, ghostData, isReady }: ViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
@@ -111,7 +112,11 @@ export default function Viewer({ mujoco, model, data, isReady }: ViewerProps) {
 
     // Create new MuJoCo renderer
     mujocoRendererRef.current = new MuJoCoRenderer(mujoco, model, sceneRef.current)
-    console.log('MuJoCo renderer created')
+
+    // Create ghost meshes for reference visualization
+    mujocoRendererRef.current.createGhostGeometries()
+
+    console.log('MuJoCo renderer created with ghost reference')
   }, [isReady, mujoco, model])
 
   // Render loop
@@ -124,6 +129,11 @@ export default function Viewer({ mujoco, model, data, isReady }: ViewerProps) {
       // Sync MuJoCo to Three.js
       if (mujocoRendererRef.current && data) {
         mujocoRendererRef.current.sync(data)
+      }
+
+      // Sync ghost reference
+      if (mujocoRendererRef.current && ghostData) {
+        mujocoRendererRef.current.syncGhost(ghostData)
       }
 
       if (rendererRef.current && sceneRef.current && cameraRef.current) {
@@ -140,7 +150,7 @@ export default function Viewer({ mujoco, model, data, isReady }: ViewerProps) {
         cancelAnimationFrame(animationFrameRef.current)
       }
     }
-  }, [data])
+  }, [data, ghostData])
 
   return (
     <div

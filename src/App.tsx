@@ -16,7 +16,7 @@ function App() {
   // Get config for the selected animal (memoized to prevent unnecessary re-renders)
   const config = useMemo(() => getAnimalConfig(animalId), [animalId])
 
-  const { mujoco, model, data, isReady: mujocoReady, error: mujocoError } = useMuJoCo(config)
+  const { mujoco, model, data, ghostData, isReady: mujocoReady, error: mujocoError } = useMuJoCo(config)
   const { session, isReady: onnxReady, error: onnxError } = useONNX(config)
   const { clips, isReady: clipsReady, error: clipsError } = useMotionClips(config)
 
@@ -27,6 +27,7 @@ function App() {
     mujoco,
     model,
     data,
+    ghostData,
     session,
     clips,
     selectedClip,
@@ -83,6 +84,7 @@ function App() {
           mujoco={mujoco}
           model={model}
           data={data}
+          ghostData={ghostData}
           isReady={isReady}
         />
 

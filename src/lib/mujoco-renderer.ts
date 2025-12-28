@@ -56,10 +56,13 @@ function toInt32Array(arr: unknown): Int32Array {
 export class MuJoCoRenderer {
   private geoms: GeomInfo[] = []
   private skins: SkinInfo[] = []
+  private ghostGeoms: GeomInfo[] = []
+  private ghostEnabled = false
   private model: MjModel
   private scene: THREE.Scene
   // Pre-allocated for sync() - avoid per-frame allocations
   private mat4 = new THREE.Matrix4()
+  private ghostMat4 = new THREE.Matrix4()
 
   constructor(_mujoco: MainModule, model: MjModel, scene: THREE.Scene) {
     this.model = model
@@ -457,6 +460,87 @@ export class MuJoCoRenderer {
     this.updateSkins(data)
   }
 
+  /**
+   * Create ghost meshes for reference visualization.
+   * Clones all geom meshes with transparent light-colored materials.
+   */
+  createGhostGeometries(): void {
+    if (this.ghostEnabled) return // Already created
+
+    for (const geom of this.geoms) {
+      // Clone material with ghost appearance
+      const originalMaterial = geom.mesh.material
+      let ghostMaterial: THREE.Material
+
+      if (originalMaterial instanceof THREE.MeshPhongMaterial) {
+        ghostMaterial = originalMaterial.clone()
+        ;(ghostMaterial as THREE.MeshPhongMaterial).transparent = true
+        ;(ghostMaterial as THREE.MeshPhongMaterial).opacity = 0.5
+        ;(ghostMaterial as THREE.MeshPhongMaterial).color.setRGB(0.9, 0.9, 0.95)
+      } else if (originalMaterial instanceof THREE.MeshStandardMaterial) {
+        // For plane/floor, skip the ghost (don't need duplicate floor)
+        continue
+      } else {
+        ghostMaterial = new THREE.MeshPhongMaterial({
+          color: new THREE.Color(0.9, 0.9, 0.95),
+          transparent: true,
+          opacity: 0.5,
+        })
+      }
+
+      // Create ghost mesh sharing geometry but with ghost material
+      const ghostMesh = new THREE.Mesh(geom.mesh.geometry, ghostMaterial)
+      ghostMesh.castShadow = false
+      ghostMesh.receiveShadow = false
+
+      this.scene.add(ghostMesh)
+      this.ghostGeoms.push({ mesh: ghostMesh, geomId: geom.geomId })
+    }
+
+    this.ghostEnabled = true
+    console.log(`Created ${this.ghostGeoms.length} ghost meshes`)
+  }
+
+  /**
+   * Sync ghost mesh transforms from ghost MjData (reference pose).
+   */
+  syncGhost(data: MjData): void {
+    if (!this.ghostEnabled) return
+
+    const geomXpos = (data as unknown as Record<string, Float64Array>).geom_xpos
+    const geomXmat = (data as unknown as Record<string, Float64Array>).geom_xmat
+    const mat4 = this.ghostMat4
+
+    for (const geom of this.ghostGeoms) {
+      const { mesh, geomId } = geom
+
+      mesh.position.set(
+        geomXpos[geomId * 3],
+        geomXpos[geomId * 3 + 1],
+        geomXpos[geomId * 3 + 2]
+      )
+
+      const o = geomId * 9
+      mat4.set(
+        geomXmat[o + 0], geomXmat[o + 1], geomXmat[o + 2], 0,
+        geomXmat[o + 3], geomXmat[o + 4], geomXmat[o + 5], 0,
+        geomXmat[o + 6], geomXmat[o + 7], geomXmat[o + 8], 0,
+        0, 0, 0, 1
+      )
+
+      mesh.quaternion.setFromRotationMatrix(mat4)
+    }
+  }
+
+  /**
+   * Set ghost visibility.
+   */
+  setGhostVisible(visible: boolean): void {
+    for (const geom of this.ghostGeoms) {
+      geom.mesh.visible = visible
+    }
+  }
+
   // Pre-allocated temporaries for skin updates (avoid per-frame allocations)
   private skinBindPos = new THREE.Vector3()
   private skinBindQuat = new THREE.Quaternion()
@@ -594,5 +678,16 @@ export class MuJoCoRenderer {
       this.scene.remove(skin.mesh)
     }
     this.skins = []
+
+    // Clean up ghost meshes
+    for (const geom of this.ghostGeoms) {
+      // Geometry is shared with main geoms, don't dispose
+      if (geom.mesh.material instanceof THREE.Material) {
+        geom.mesh.material.dispose()
+      }
+      this.scene.remove(geom.mesh)
+    }
+    this.ghostGeoms = []
+    this.ghostEnabled = false
   }
 }

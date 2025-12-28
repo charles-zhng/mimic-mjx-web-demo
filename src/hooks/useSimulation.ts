@@ -5,10 +5,14 @@ import type { AnimalConfig } from '../types/animal-config'
 import { runInference, extractActionInto } from './useONNX'
 import { buildObservation } from '../lib/observation'
 
+// Ghost reference offset in meters (+X direction = side by side)
+const GHOST_OFFSET_X = 0.3
+
 interface UseSimulationProps {
   mujoco: MainModule | null
   model: MjModel | null
   data: MjData | null
+  ghostData: MjData | null
   session: InferenceSession | null
   clips: MotionClip[] | null
   selectedClip: number
@@ -22,6 +26,7 @@ export function useSimulation({
   mujoco,
   model,
   data,
+  ghostData,
   session,
   clips,
   selectedClip,
@@ -67,6 +72,21 @@ export function useSimulation({
     // Forward kinematics to update derived quantities
     mujoco.mj_forward(model, data)
 
+    // Reset ghost data to match initial reference pose (with offset)
+    if (ghostData) {
+      mujoco.mj_resetData(model, ghostData)
+      const ghostQpos = ghostData.qpos as unknown as Float64Array
+      for (let i = 0; i < Math.min(refQpos.length, model.nq); i++) {
+        ghostQpos[i] = refQpos[i]
+      }
+      ghostQpos[0] += GHOST_OFFSET_X  // Apply X offset
+      const ghostQvel = ghostData.qvel as unknown as Float64Array
+      for (let i = 0; i < model.nv; i++) {
+        ghostQvel[i] = 0
+      }
+      mujoco.mj_forward(model, ghostData)
+    }
+
     // Reset simulation state
     data.time = 0
     setCurrentFrame(0)
@@ -74,7 +94,7 @@ export function useSimulation({
     prevActionRef.current.fill(0)  // Zero the buffer instead of allocating new
 
     console.log('Simulation reset to clip:', clip.name)
-  }, [mujoco, model, data, clips, selectedClip, config.action.size])
+  }, [mujoco, model, data, ghostData, clips, selectedClip, config.action.size])
 
   // Reset when clip changes
   useEffect(() => {
@@ -151,6 +171,29 @@ export function useSimulation({
           mujoco.mj_step(model, data)
         }
 
+        // Update ghost reference pose (kinematics only, no physics)
+        if (ghostData) {
+          const refQpos = clip.qpos[newFrame]
+          const ghostQpos = ghostData.qpos as unknown as Float64Array
+
+          // Copy reference qpos to ghost
+          for (let i = 0; i < Math.min(refQpos.length, model.nq); i++) {
+            ghostQpos[i] = refQpos[i]
+          }
+
+          // Apply root offset (+X direction for side-by-side view)
+          ghostQpos[0] += GHOST_OFFSET_X
+
+          // Zero velocities
+          const ghostQvel = ghostData.qvel as unknown as Float64Array
+          for (let i = 0; i < model.nv; i++) {
+            ghostQvel[i] = 0
+          }
+
+          // Compute forward kinematics (no physics step)
+          mujoco.mj_forward(model, ghostData)
+        }
+
         // Debug logging
         if ((globalThis as unknown as Record<string, boolean>).__SIM_DEBUG__) {
           const xpos = data.xpos as unknown as Float64Array
@@ -188,7 +231,7 @@ export function useSimulation({
         animationRef.current = null
       }
     }
-  }, [isReady, isPlaying, mujoco, model, data, session, clips, selectedClip, speed, reset, config])
+  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, clips, selectedClip, speed, reset, config])
 
   return {
     currentFrame,

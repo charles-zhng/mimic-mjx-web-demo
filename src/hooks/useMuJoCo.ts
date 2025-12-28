@@ -6,6 +6,7 @@ interface UseMuJoCoResult {
   mujoco: MainModule | null
   model: MjModel | null
   data: MjData | null
+  ghostData: MjData | null
   isReady: boolean
   error: string | null
 }
@@ -14,6 +15,7 @@ export function useMuJoCo(config: AnimalConfig): UseMuJoCoResult {
   const [mujoco, setMujoco] = useState<MainModule | null>(null)
   const [model, setModel] = useState<MjModel | null>(null)
   const [data, setData] = useState<MjData | null>(null)
+  const [ghostData, setGhostData] = useState<MjData | null>(null)
   const [isReady, setIsReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const initRef = useRef(false)
@@ -60,9 +62,15 @@ export function useMuJoCo(config: AnimalConfig): UseMuJoCoResult {
         const mjData = new mj.MjData(mjModel)
         setData(mjData)
 
+        // Create ghost data for reference visualization (kinematics only)
+        const mjGhostData = new mj.MjData(mjModel)
+        setGhostData(mjGhostData)
+
         // Reset to initial state
         mj.mj_resetData(mjModel, mjData)
         mj.mj_forward(mjModel, mjData)
+        mj.mj_resetData(mjModel, mjGhostData)
+        mj.mj_forward(mjModel, mjGhostData)
 
         setIsReady(true)
         console.log(`MuJoCo initialized for ${config.name}`)
@@ -77,5 +85,5 @@ export function useMuJoCo(config: AnimalConfig): UseMuJoCoResult {
     init()
   }, [config])
 
-  return { mujoco, model, data, isReady, error }
+  return { mujoco, model, data, ghostData, isReady, error }
 }
