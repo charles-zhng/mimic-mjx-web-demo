@@ -5,7 +5,7 @@ import type { AnimalConfig } from '../types/animal-config'
 import { runInference, runDecoderInference, extractActionInto } from './useONNX'
 import { buildObservation, buildProprioceptiveObservation } from '../lib/observation'
 
-export type InferenceMode = 'tracking' | 'latentWalk'
+export type InferenceMode = 'tracking' | 'latentWalk' | 'latentNoise'
 
 interface UseSimulationProps {
   mujoco: MainModule | null
@@ -154,11 +154,12 @@ export function useSimulation({
   // Main simulation loop
   useEffect(() => {
     // For tracking mode, we need clips and session
-    // For latent walk mode, we need decoderSession and latentSpace config
+    // For latent walk/noise modes, we need decoderSession and latentSpace config
     const canRunTracking = isReady && isPlaying && mujoco && model && data && session && clips && inferenceMode === 'tracking'
     const canRunLatentWalk = isReady && isPlaying && mujoco && model && data && decoderSession && config.latentSpace && inferenceMode === 'latentWalk'
+    const canRunLatentNoise = isReady && isPlaying && mujoco && model && data && decoderSession && config.latentSpace && inferenceMode === 'latentNoise'
 
-    if (!canRunTracking && !canRunLatentWalk) {
+    if (!canRunTracking && !canRunLatentWalk && !canRunLatentNoise) {
       return
     }
 
@@ -251,6 +252,28 @@ export function useSimulation({
 
           // Run decoder inference
           logits = await runDecoderInference(decoderSession, ouStateRef.current.x, proprioObs)
+        } else if (inferenceMode === 'latentNoise' && decoderSession && config.latentSpace) {
+          // === LATENT NOISE MODE (independent) ===
+          // Sample independent Gaussian noise at each step
+          setCurrentFrame(Math.floor(accumulatedTimeRef.current * config.timing.mocapHz))
+
+          // Generate independent Gaussian noise for latent space
+          const latentNoise = new Float32Array(config.latentSpace.size)
+          for (let i = 0; i < latentNoise.length; i++) {
+            latentNoise[i] = gaussianRandom() * config.latentSpace.ouSigma * noiseMagnitude
+          }
+
+          // Build proprioceptive-only observation
+          const proprioObs = buildProprioceptiveObservation(
+            mujoco,
+            model,
+            data,
+            prevActionRef.current,
+            config
+          )
+
+          // Run decoder inference
+          logits = await runDecoderInference(decoderSession, latentNoise, proprioObs)
         } else {
           // Should not reach here
           animationRef.current = requestAnimationFrame(simulate)

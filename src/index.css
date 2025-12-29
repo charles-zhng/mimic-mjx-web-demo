@@ -153,6 +153,15 @@ html, body, #root {
   width: 100%;
 }
 
+.custom-select-sizer {
+  visibility: hidden;
+  height: 0;
+  overflow: hidden;
+  padding: 0 40px 0 12px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 .custom-select.disabled {
   opacity: 0.5;
   pointer-events: none;

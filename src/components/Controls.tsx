@@ -47,6 +47,7 @@ export default function Controls({
           options={[
             { value: 'tracking', label: 'Motion Tracking' },
             { value: 'latentWalk', label: 'Latent Random Walk (OU process)' },
+            { value: 'latentNoise', label: 'Latent Random Noise (independent)' },
           ]}
           onChange={(value) => onModeChange(value as InferenceMode)}
         />
@@ -79,7 +80,7 @@ export default function Controls({
         </div>
       )}
 
-      {inferenceMode === 'latentWalk' && (
+      {(inferenceMode === 'latentWalk' || inferenceMode === 'latentNoise') && (
         <div className="control-group">
           <label>Noise: {noiseMagnitude.toFixed(1)}x</label>
           <input

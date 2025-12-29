@@ -35,6 +35,12 @@ export default function Select({ value, options, onChange, disabled }: SelectPro
 
   return (
     <div className={`custom-select ${disabled ? 'disabled' : ''}`} ref={containerRef}>
+      {/* Hidden sizer to establish width based on longest option */}
+      <div className="custom-select-sizer" aria-hidden="true">
+        {options.map(option => (
+          <div key={option.value}>{option.label}</div>
+        ))}
+      </div>
       <button
         type="button"
         className={`custom-select-trigger ${isOpen ? 'open' : ''}`}
