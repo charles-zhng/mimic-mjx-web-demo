@@ -163,7 +163,7 @@
     <texture type="2d" colorspace="auto" name="grid-rodent" builtin="checker" rgb1="0.1 0.2 0.3" rgb2="0.2 0.3 0.4" width="512" height="512"/>
     <material name="grid" texture="grid" texuniform="true" reflectance="0.2"/>
     <material name="grid-rodent" texture="grid-rodent" texuniform="true" reflectance="0.2"/>
-      <skin name="skin" file="rodent_walker_skin.skn"/>
+    <skin name="skin" file="rodent_walker_skin.skn"/>
   </asset>
 
   <worldbody>

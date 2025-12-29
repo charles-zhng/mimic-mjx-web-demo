@@ -1,5 +1,7 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
 :root {
-  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.5;
   font-weight: 400;
 
@@ -72,13 +74,181 @@ html, body, #root {
   width: 100%;
 }
 
-.control-group select {
-  padding: 6px 8px;
-  border-radius: 4px;
-  border: 1px solid #444;
+/* Range slider styling */
+.control-group input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  background: linear-gradient(
+    to right,
+    #4a9eff 0%,
+    #4a9eff var(--fill-percent, 50%),
+    #3a3a3a var(--fill-percent, 50%),
+    #3a3a3a 100%
+  );
+  border-radius: 3px;
+  cursor: pointer;
+  margin: 8px 0;
+}
+
+.control-group input[type="range"]:focus {
+  outline: none;
+}
+
+/* Webkit (Chrome, Safari, Edge) */
+.control-group input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  background: #4a9eff;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.control-group input[type="range"]::-webkit-slider-thumb:hover {
+  background: #5aafff;
+  transform: scale(1.1);
+}
+
+.control-group input[type="range"]:active::-webkit-slider-thumb {
+  background: #3a8eef;
+  box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.2);
+}
+
+/* Firefox */
+.control-group input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  background: #4a9eff;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.2s, transform 0.2s, box-shadow 0.2s;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.control-group input[type="range"]::-moz-range-thumb:hover {
+  background: #5aafff;
+  transform: scale(1.1);
+}
+
+.control-group input[type="range"]::-moz-range-track {
+  height: 6px;
+  background: linear-gradient(
+    to right,
+    #4a9eff 0%,
+    #4a9eff var(--fill-percent, 50%),
+    #3a3a3a var(--fill-percent, 50%),
+    #3a3a3a 100%
+  );
+  border-radius: 3px;
+}
+
+/* Custom Select Component */
+.custom-select {
+  position: relative;
+  width: 100%;
+}
+
+.custom-select.disabled {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.custom-select-trigger {
+  width: 100%;
+  padding: 8px 32px 8px 12px;
+  border-radius: 6px;
+  border: 1px solid #3a3a3a;
   background: #2a2a2a;
   color: #fff;
   font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  font-family: inherit;
+}
+
+.custom-select-trigger:hover {
+  border-color: #555;
+  background-color: #333;
+}
+
+.custom-select-trigger.open {
+  border-color: #4a9eff;
+  box-shadow: 0 0 0 2px rgba(74, 158, 255, 0.2);
+}
+
+.custom-select-arrow {
+  position: absolute;
+  right: 10px;
+  color: #888;
+  transition: transform 0.2s;
+  pointer-events: none;
+}
+
+.custom-select-trigger.open .custom-select-arrow {
+  transform: rotate(180deg);
+}
+
+.custom-select-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: #2a2a2a;
+  border: 1px solid #3a3a3a;
+  border-radius: 6px;
+  overflow: hidden;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Custom scrollbar for dropdown menu */
+.custom-select-menu::-webkit-scrollbar {
+  width: 8px;
+}
+
+.custom-select-menu::-webkit-scrollbar-track {
+  background: #1a1a1a;
+  border-radius: 4px;
+}
+
+.custom-select-menu::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 4px;
+}
+
+.custom-select-menu::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}
+
+.custom-select-option {
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 13px;
+}
+
+.custom-select-option:hover {
+  background: #3a3a3a;
+}
+
+.custom-select-option.selected {
+  background: #4a9eff;
+  color: #fff;
+}
+
+.custom-select-option.selected:hover {
+  background: #5aafff;
 }
 
 .button-group {

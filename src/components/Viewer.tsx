@@ -6,6 +6,46 @@ import type { AnimalConfig } from '../types/animal-config'
 import type { InferenceMode } from '../hooks/useSimulation'
 import { MuJoCoRenderer } from '../lib/mujoco-renderer'
 
+/**
+ * Create a black skybox with random white stars
+ */
+function createSkyboxTexture(): THREE.CubeTexture {
+  const size = 512
+  const faces: HTMLCanvasElement[] = []
+
+  // Three.js CubeTexture face order: +X, -X, +Y, -Y, +Z, -Z
+  for (let face = 0; face < 6; face++) {
+    const canvas = document.createElement('canvas')
+    canvas.width = size
+    canvas.height = size
+    const ctx = canvas.getContext('2d')!
+
+    // Solid black background
+    ctx.fillStyle = 'rgb(0, 0, 0)'
+    ctx.fillRect(0, 0, size, size)
+
+    // Add random white stars (except on ground face)
+    if (face !== 5) {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.8)'
+      const starCount = face === 4 ? 150 : 80
+      for (let i = 0; i < starCount; i++) {
+        const x = Math.random() * size
+        const y = Math.random() * size
+        const starSize = Math.random() * 0.6 + 0.1
+        ctx.beginPath()
+        ctx.arc(x, y, starSize, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+
+    faces.push(canvas)
+  }
+
+  const texture = new THREE.CubeTexture(faces)
+  texture.needsUpdate = true
+  return texture
+}
+
 interface ViewerProps {
   mujoco: MainModule | null
   model: MjModel | null
@@ -34,7 +74,7 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
 
     // Scene
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x1a1a1a)
+    scene.background = createSkyboxTexture()
     sceneRef.current = scene
 
     // Camera - MuJoCo uses Z-up, so we position camera accordingly
