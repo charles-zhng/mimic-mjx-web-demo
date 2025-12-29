@@ -139,6 +139,22 @@ function App() {
           {' | '}
           Speed: {speed.toFixed(1)}x
         </div>
+
+        <div className="project-link">
+          <div>
+            Part of the{' '}
+            <a href="https://mimic-mjx.talmolab.org/" target="_blank" rel="noopener noreferrer">
+              MIMIC-MJX
+            </a>{' '}
+            project
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            Created by{' '}
+            <a href="https://charles-zhng.github.io/" target="_blank" rel="noopener noreferrer">
+              Charles Zhang
+            </a>
+          </div>
+        </div>
       </div>
     </div>
   )
