@@ -111,9 +111,9 @@ export class MuJoCoRenderer {
           canvas.height = texSize
           const ctx = canvas.getContext('2d')!
 
-          // MuJoCo default checkerboard colors (light grey and dark grey)
-          const color1 = '#999999'
-          const color2 = '#666666'
+          // MuJoCo default checkerboard colors (blue tones)
+          const color1 = '#334D66' // rgb(0.2, 0.3, 0.4)
+          const color2 = '#1A334D' // rgb(0.1, 0.2, 0.3)
 
           for (let y = 0; y < numSquares; y++) {
             for (let x = 0; x < numSquares; x++) {
