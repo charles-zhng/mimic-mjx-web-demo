@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import type { MainModule, MjModel, MjData } from '../types'
 import type { AnimalConfig } from '../types/animal-config'
+import type { InferenceMode } from '../hooks/useSimulation'
 import { MuJoCoRenderer } from '../lib/mujoco-renderer'
 
 interface ViewerProps {
@@ -12,9 +13,10 @@ interface ViewerProps {
   ghostData: MjData | null
   isReady: boolean
   config: AnimalConfig
+  inferenceMode: InferenceMode
 }
 
-export default function Viewer({ mujoco, model, data, ghostData, isReady, config }: ViewerProps) {
+export default function Viewer({ mujoco, model, data, ghostData, isReady, config, inferenceMode }: ViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
@@ -124,6 +126,13 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
     console.log('MuJoCo renderer created with ghost reference')
   }, [isReady, mujoco, model])
 
+  // Toggle ghost visibility based on inference mode
+  useEffect(() => {
+    if (mujocoRendererRef.current) {
+      mujocoRendererRef.current.setGhostVisible(inferenceMode === 'tracking')
+    }
+  }, [inferenceMode])
+
   // Center camera on midpoint between rodent and ghost torsos on initial load
   useEffect(() => {
     if (!isReady || !data || !cameraRef.current || !controlsRef.current || hasCenteredRef.current) return
@@ -136,8 +145,10 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
     const torsoY = xpos[body.torsoIndex * 3 + 1]
     const torsoZ = xpos[body.torsoIndex * 3 + 2]
 
-    // Center between rodent torso and ghost torso (ghost is offset in +X)
-    const centerX = torsoX + rendering.ghostOffset / 2
+    // In tracking mode, center between rodent and ghost torsos
+    // In latent walk mode, center on rodent only (no ghost)
+    const ghostOffsetForCamera = inferenceMode === 'tracking' ? rendering.ghostOffset / 2 : 0
+    const centerX = torsoX + ghostOffsetForCamera
     const centerY = torsoY
     const centerZ = torsoZ
 
@@ -155,7 +166,7 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
 
     controlsRef.current.update()
     hasCenteredRef.current = true
-  }, [isReady, data, config])
+  }, [isReady, data, config, inferenceMode])
 
   // Render loop
   useEffect(() => {

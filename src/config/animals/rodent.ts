@@ -22,6 +22,7 @@ export const rodentConfig: AnimalConfig = {
     modelPath: '/models/rodent_scaled.xml',
     skinPath: '/models/rodent_walker_skin.skn',
     onnxPath: '/nn/intention_network.onnx?v=3',
+    decoderOnnxPath: '/nn/decoder_only.onnx',
     clipsPath: '/motions/clips.json',
   },
 
@@ -79,5 +80,12 @@ export const rodentConfig: AnimalConfig = {
     lightPosition: [2, -2, 5],
     shadowBounds: 2,
     ghostOffset: 0.3,
+  },
+
+  latentSpace: {
+    size: 16,
+    ouTheta: 0.15,   // Mean reversion rate
+    ouMu: 0.0,       // Long-term mean
+    ouSigma: 0.3,    // Volatility
   },
 }

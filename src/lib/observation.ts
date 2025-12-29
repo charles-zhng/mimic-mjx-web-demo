@@ -9,6 +9,9 @@ import { getBodyIndicesModel, getEndEffectorIndicesModel } from '../types/animal
 // Main observation buffer (lazily initialized based on config)
 let _obsBuffer: Float32Array | null = null
 
+// Proprioceptive-only observation buffer (for latent walk mode)
+let _proprioObsBuffer: Float32Array | null = null
+
 // Working arrays for quaternion math (fixed size)
 const _quatTemp1 = [0, 0, 0, 0]
 const _quatTemp2 = [0, 0, 0, 0]
@@ -299,6 +302,116 @@ export function buildObservation(
     console.log('root_targets (obs[0:15]):', Array.from(obs.slice(0, 15)))
     console.log('obsLength:', obs.length)
     console.log('obsSum:', Array.from(obs).reduce((a, b) => a + b, 0))
+  }
+
+  return obs
+}
+
+/**
+ * Build proprioceptive-only observation for latent walk mode.
+ * This extracts only the current robot state (no reference trajectory targets).
+ *
+ * Order: joints, velocities, forces, height, zaxis, appendages, kinematic sensors, touch, prev_action
+ *
+ * @param config Animal configuration with all dimensions and indices
+ */
+export function buildProprioceptiveObservation(
+  _mujoco: MainModule,
+  model: MjModel,
+  data: MjData,
+  prevAction: Float32Array,
+  config: AnimalConfig
+): Float32Array {
+  // Reuse buffer (lazily allocate if size changed)
+  if (!_proprioObsBuffer || _proprioObsBuffer.length !== config.obs.proprioceptiveObsSize) {
+    _proprioObsBuffer = new Float32Array(config.obs.proprioceptiveObsSize)
+  }
+  const obs = _proprioObsBuffer
+
+  // Derive model indices from config
+  const endEffectorIndicesModel = getEndEffectorIndicesModel(config)
+
+  // Get current state from MuJoCo data
+  const qpos = (data as unknown as Record<string, Float64Array>).qpos
+  const qvel = (data as unknown as Record<string, Float64Array>).qvel
+  const qfrcActuator = (data as unknown as Record<string, Float64Array>).qfrc_actuator
+  const xpos = (data as unknown as Record<string, Float64Array>).xpos
+  const xmat = (data as unknown as Record<string, Float64Array>).xmat
+
+  let propIdx = 0
+
+  // Joint angles (excluding root DOFs): numJoints values
+  for (let i = config.body.rootDOFs; i < model.nq; i++) {
+    obs[propIdx++] = qpos[i]
+  }
+
+  // Joint velocities (excluding root vel DOFs): numJoints values
+  for (let i = config.body.rootVelDOFs; i < model.nv; i++) {
+    obs[propIdx++] = qvel[i]
+  }
+
+  // Actuator forces (qfrc_actuator): nv values
+  for (let i = 0; i < model.nv; i++) {
+    obs[propIdx++] = qfrcActuator[i]
+  }
+
+  // Body height (torso z position): 1 value
+  const torsoZ = xpos[config.body.torsoIndex * 3 + 2]
+  obs[propIdx++] = torsoZ
+
+  // World z-axis in body frame (from root body rotation matrix): 3 values
+  obs[propIdx++] = xmat[config.body.walkerIndex * 9 + 6]
+  obs[propIdx++] = xmat[config.body.walkerIndex * 9 + 7]
+  obs[propIdx++] = xmat[config.body.walkerIndex * 9 + 8]
+
+  // Appendages positions (egocentric relative to torso): endEffectors × 3 values
+  const torsoIdx = config.body.torsoIndex
+  _torsoPos[0] = xpos[torsoIdx * 3]
+  _torsoPos[1] = xpos[torsoIdx * 3 + 1]
+  _torsoPos[2] = xpos[torsoIdx * 3 + 2]
+  // Get torso rotation matrix for egocentric transform
+  const torsoMatBase = torsoIdx * 9
+  _torsoMat[0] = xmat[torsoMatBase]; _torsoMat[1] = xmat[torsoMatBase + 1]; _torsoMat[2] = xmat[torsoMatBase + 2]
+  _torsoMat[3] = xmat[torsoMatBase + 3]; _torsoMat[4] = xmat[torsoMatBase + 4]; _torsoMat[5] = xmat[torsoMatBase + 5]
+  _torsoMat[6] = xmat[torsoMatBase + 6]; _torsoMat[7] = xmat[torsoMatBase + 7]; _torsoMat[8] = xmat[torsoMatBase + 8]
+
+  for (const bodyIdx of endEffectorIndicesModel) {
+    _bodyPos[0] = xpos[bodyIdx * 3]
+    _bodyPos[1] = xpos[bodyIdx * 3 + 1]
+    _bodyPos[2] = xpos[bodyIdx * 3 + 2]
+    _rel[0] = _bodyPos[0] - _torsoPos[0]
+    _rel[1] = _bodyPos[1] - _torsoPos[1]
+    _rel[2] = _bodyPos[2] - _torsoPos[2]
+    // Matrix-vector multiply: rel @ torso_mat (row-major)
+    obs[propIdx++] = _rel[0] * _torsoMat[0] + _rel[1] * _torsoMat[3] + _rel[2] * _torsoMat[6]
+    obs[propIdx++] = _rel[0] * _torsoMat[1] + _rel[1] * _torsoMat[4] + _rel[2] * _torsoMat[7]
+    obs[propIdx++] = _rel[0] * _torsoMat[2] + _rel[1] * _torsoMat[5] + _rel[2] * _torsoMat[8]
+  }
+
+  // Kinematic sensors: accelerometer + velocimeter + gyro
+  const sensordata = (data as unknown as Record<string, Float64Array>).sensordata
+
+  // Accelerometer
+  for (let i = config.sensors.kinematic.accelerometer[0]; i < config.sensors.kinematic.accelerometer[1]; i++) {
+    obs[propIdx++] = sensordata[i] || 0
+  }
+  // Velocimeter
+  for (let i = config.sensors.kinematic.velocimeter[0]; i < config.sensors.kinematic.velocimeter[1]; i++) {
+    obs[propIdx++] = sensordata[i] || 0
+  }
+  // Gyro
+  for (let i = config.sensors.kinematic.gyro[0]; i < config.sensors.kinematic.gyro[1]; i++) {
+    obs[propIdx++] = sensordata[i] || 0
+  }
+
+  // Touch sensors
+  for (const touch of config.sensors.touch) {
+    obs[propIdx++] = sensordata[touch.index] || 0
+  }
+
+  // Previous action: actionSize values
+  for (let i = 0; i < config.action.size; i++) {
+    obs[propIdx++] = prevAction[i]
   }
 
   return obs

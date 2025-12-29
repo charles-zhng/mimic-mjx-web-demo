@@ -2,8 +2,10 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import type { InferenceSession } from 'onnxruntime-web'
 import type { MainModule, MjModel, MjData, MotionClip, SimulationState } from '../types'
 import type { AnimalConfig } from '../types/animal-config'
-import { runInference, extractActionInto } from './useONNX'
-import { buildObservation } from '../lib/observation'
+import { runInference, runDecoderInference, extractActionInto } from './useONNX'
+import { buildObservation, buildProprioceptiveObservation } from '../lib/observation'
+
+export type InferenceMode = 'tracking' | 'latentWalk'
 
 interface UseSimulationProps {
   mujoco: MainModule | null
@@ -11,12 +13,47 @@ interface UseSimulationProps {
   data: MjData | null
   ghostData: MjData | null
   session: InferenceSession | null
+  decoderSession: InferenceSession | null
   clips: MotionClip[] | null
   selectedClip: number
   isPlaying: boolean
   speed: number
   isReady: boolean
   config: AnimalConfig
+  inferenceMode: InferenceMode
+}
+
+// Ornstein-Uhlenbeck process state
+interface OUState {
+  x: Float32Array
+  initialized: boolean
+}
+
+/**
+ * Generate a standard normal random number using Box-Muller transform.
+ */
+function gaussianRandom(): number {
+  const u1 = Math.random()
+  const u2 = Math.random()
+  return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2)
+}
+
+/**
+ * Step the Ornstein-Uhlenbeck process in-place.
+ * dx = theta * (mu - x) * dt + sigma * sqrt(dt) * dW
+ */
+function stepOUProcess(
+  state: Float32Array,
+  dt: number,
+  theta: number,
+  mu: number,
+  sigma: number
+): void {
+  const sqrtDt = Math.sqrt(dt)
+  for (let i = 0; i < state.length; i++) {
+    const dW = gaussianRandom()
+    state[i] += theta * (mu - state[i]) * dt + sigma * sqrtDt * dW
+  }
 }
 
 export function useSimulation({
@@ -25,18 +62,26 @@ export function useSimulation({
   data,
   ghostData,
   session,
+  decoderSession,
   clips,
   selectedClip,
   isPlaying,
   speed,
   isReady,
   config,
+  inferenceMode,
 }: UseSimulationProps): SimulationState {
   const [currentFrame, setCurrentFrame] = useState(0)
   const animationRef = useRef<number | null>(null)
   const lastTimeRef = useRef<number>(0)
   const accumulatedTimeRef = useRef<number>(0)
   const prevActionRef = useRef<Float32Array>(new Float32Array(config.action.size))
+
+  // OU process state for latent walk mode
+  const ouStateRef = useRef<OUState>({
+    x: new Float32Array(config.latentSpace?.size ?? 16),
+    initialized: false,
+  })
 
   // Reset simulation to initial state
   const reset = useCallback(() => {
@@ -90,6 +135,10 @@ export function useSimulation({
     accumulatedTimeRef.current = 0
     prevActionRef.current.fill(0)  // Zero the buffer instead of allocating new
 
+    // Reset OU state for latent walk mode
+    ouStateRef.current.x.fill(0)
+    ouStateRef.current.initialized = false
+
     console.log('Simulation reset to clip:', clip.name)
   }, [mujoco, model, data, ghostData, clips, selectedClip, config.action.size])
 
@@ -102,12 +151,16 @@ export function useSimulation({
 
   // Main simulation loop
   useEffect(() => {
-    if (!isReady || !isPlaying || !mujoco || !model || !data || !session || !clips) {
+    // For tracking mode, we need clips and session
+    // For latent walk mode, we need decoderSession and latentSpace config
+    const canRunTracking = isReady && isPlaying && mujoco && model && data && session && clips && inferenceMode === 'tracking'
+    const canRunLatentWalk = isReady && isPlaying && mujoco && model && data && decoderSession && config.latentSpace && inferenceMode === 'latentWalk'
+
+    if (!canRunTracking && !canRunLatentWalk) {
       return
     }
 
-    const clip = clips[selectedClip]
-    if (!clip) return
+    const clip = clips?.[selectedClip]
 
     const simulate = async (timestamp: number) => {
       // Calculate delta time
@@ -118,42 +171,94 @@ export function useSimulation({
       lastTimeRef.current = timestamp
       accumulatedTimeRef.current += deltaTime
 
-      // Calculate current reference frame
+      // Calculate current frame (for tracking mode display)
       const frameTime = accumulatedTimeRef.current
       const newFrame = Math.floor(frameTime * config.timing.mocapHz)
 
-      // Check if we've reached the end of the clip
-      if (newFrame >= clip.num_frames - config.obs.referenceLength) {
-        // Loop back to start
-        accumulatedTimeRef.current = 0
-        setCurrentFrame(0)
-        reset()
-        animationRef.current = requestAnimationFrame(simulate)
-        return
-      }
-
-      setCurrentFrame(newFrame)
-
       try {
-        // Build observation (ONNX model handles normalization internally)
-        const obs = buildObservation(
-          mujoco,
-          model,
-          data,
-          clip,
-          newFrame,
-          prevActionRef.current,
-          config
-        )
+        let logits: Float32Array
 
-        // Run inference (ONNX model normalizes input internally)
-        const logits = await runInference(session, obs)
+        if (inferenceMode === 'tracking' && clip && session) {
+          // === TRACKING MODE ===
+          // Check if we've reached the end of the clip
+          if (newFrame >= clip.num_frames - config.obs.referenceLength) {
+            // Loop back to start
+            accumulatedTimeRef.current = 0
+            setCurrentFrame(0)
+            reset()
+            animationRef.current = requestAnimationFrame(simulate)
+            return
+          }
+
+          setCurrentFrame(newFrame)
+
+          // Build full observation
+          const obs = buildObservation(
+            mujoco,
+            model,
+            data,
+            clip,
+            newFrame,
+            prevActionRef.current,
+            config
+          )
+
+          // Run full inference
+          logits = await runInference(session, obs)
+
+          // Update ghost reference pose (kinematics only, no physics)
+          if (ghostData) {
+            const refQpos = clip.qpos[newFrame]
+            const ghostQpos = ghostData.qpos as unknown as Float64Array
+
+            for (let i = 0; i < Math.min(refQpos.length, model.nq); i++) {
+              ghostQpos[i] = refQpos[i]
+            }
+            ghostQpos[0] += config.rendering.ghostOffset
+
+            const ghostQvel = ghostData.qvel as unknown as Float64Array
+            for (let i = 0; i < model.nv; i++) {
+              ghostQvel[i] = 0
+            }
+
+            mujoco.mj_forward(model, ghostData)
+          }
+        } else if (inferenceMode === 'latentWalk' && decoderSession && config.latentSpace) {
+          // === LATENT WALK MODE ===
+          // No frame tracking in latent walk mode - runs indefinitely
+          setCurrentFrame(Math.floor(accumulatedTimeRef.current * config.timing.mocapHz))
+
+          // Initialize OU state if needed
+          if (!ouStateRef.current.initialized) {
+            ouStateRef.current.x.fill(0)
+            ouStateRef.current.initialized = true
+          }
+
+          // Step OU process
+          const { ouTheta, ouMu, ouSigma } = config.latentSpace
+          stepOUProcess(ouStateRef.current.x, config.timing.ctrlDt, ouTheta, ouMu, ouSigma)
+
+          // Build proprioceptive-only observation
+          const proprioObs = buildProprioceptiveObservation(
+            mujoco,
+            model,
+            data,
+            prevActionRef.current,
+            config
+          )
+
+          // Run decoder inference
+          logits = await runDecoderInference(decoderSession, ouStateRef.current.x, proprioObs)
+        } else {
+          // Should not reach here
+          animationRef.current = requestAnimationFrame(simulate)
+          return
+        }
 
         // Extract action (tanh of mean) into pre-allocated buffer
         extractActionInto(prevActionRef.current, logits)
 
         // Apply action to MuJoCo control
-        // MuJoCo WASM exposes ctrl as a Float64Array view
         const ctrl = data.ctrl as unknown as Float64Array
         const action = prevActionRef.current
         for (let i = 0; i < model.nu; i++) {
@@ -161,34 +266,10 @@ export function useSimulation({
         }
 
         // Step the simulation
-        // Run multiple physics substeps per control step
         const modelOpt = (model as unknown as { opt: { timestep: number } }).opt
         const numSubsteps = modelOpt?.timestep ? Math.round(config.timing.ctrlDt / modelOpt.timestep) : 5
         for (let i = 0; i < numSubsteps; i++) {
           mujoco.mj_step(model, data)
-        }
-
-        // Update ghost reference pose (kinematics only, no physics)
-        if (ghostData) {
-          const refQpos = clip.qpos[newFrame]
-          const ghostQpos = ghostData.qpos as unknown as Float64Array
-
-          // Copy reference qpos to ghost
-          for (let i = 0; i < Math.min(refQpos.length, model.nq); i++) {
-            ghostQpos[i] = refQpos[i]
-          }
-
-          // Apply root offset (+X direction for side-by-side view)
-          ghostQpos[0] += config.rendering.ghostOffset
-
-          // Zero velocities
-          const ghostQvel = ghostData.qvel as unknown as Float64Array
-          for (let i = 0; i < model.nv; i++) {
-            ghostQvel[i] = 0
-          }
-
-          // Compute forward kinematics (no physics step)
-          mujoco.mj_forward(model, ghostData)
         }
 
         // Debug logging
@@ -196,7 +277,6 @@ export function useSimulation({
           const xpos = data.xpos as unknown as Float64Array
           const torsoZ = xpos[config.body.torsoIndex * 3 + 2]
 
-          // Track data in global arrays
           const heights = ((globalThis as unknown as Record<string, number[]>).__HEIGHTS__ ||= [])
           const frames = ((globalThis as unknown as Record<string, number[]>).__FRAMES__ ||= [])
           heights.push(torsoZ)
@@ -228,7 +308,7 @@ export function useSimulation({
         animationRef.current = null
       }
     }
-  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, clips, selectedClip, speed, reset, config])
+  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, clips, selectedClip, speed, reset, config, inferenceMode])
 
   return {
     currentFrame,

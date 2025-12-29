@@ -16,6 +16,8 @@ export interface AnimalConfig {
     skinPath: string | null
     /** ONNX neural network path, e.g., "/nn/intention_network.onnx" */
     onnxPath: string
+    /** Decoder-only ONNX path for latent walk mode (optional) */
+    decoderOnnxPath?: string
     /** Motion clips JSON path, e.g., "/motions/clips.json" */
     clipsPath: string
   }
@@ -98,6 +100,18 @@ export interface AnimalConfig {
     shadowBounds: number
     /** Ghost reference X offset in meters */
     ghostOffset: number
+  }
+
+  // Latent space configuration for random walk mode (optional)
+  latentSpace?: {
+    /** Latent vector dimension (e.g., 16) */
+    size: number
+    /** OU process mean reversion rate - higher = faster return to mean */
+    ouTheta: number
+    /** OU process long-term mean (typically 0) */
+    ouMu: number
+    /** OU process volatility - higher = larger movements */
+    ouSigma: number
   }
 }
 

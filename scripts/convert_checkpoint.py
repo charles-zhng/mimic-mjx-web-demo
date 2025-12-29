@@ -31,6 +31,132 @@ from onnx import TensorProto, helper, numpy_helper
 from track_mjx.agent import checkpointing
 
 
+def build_decoder_only_onnx_model(normalizer_params, decoder_params, cfg):
+    """Build decoder-only ONNX model for latent space random walk mode.
+
+    This model takes a latent vector and proprioceptive observation as inputs,
+    normalizes the proprioceptive observation, and runs through the decoder.
+
+    Args:
+        normalizer_params: RunningStatisticsState for observation normalization
+        decoder_params: Dict containing decoder Dense and LayerNorm params
+        cfg: Configuration dict from checkpoint
+
+    Returns:
+        ONNX ModelProto
+    """
+    reference_obs_size = cfg.network_config.reference_obs_size
+    proprio_obs_size = cfg.network_config.proprioceptive_obs_size
+    latent_size = cfg.network_config.intention_size
+
+    # Convert params to numpy - only need proprio portion of normalization
+    norm_mean_full = np.array(normalizer_params.mean).astype(np.float32)
+    norm_std_full = np.array(normalizer_params.std).astype(np.float32)
+    proprio_norm_mean = norm_mean_full[reference_obs_size:]
+    proprio_norm_std = norm_std_full[reference_obs_size:] + 1e-8
+    decoder_params_np = jax.tree.map(lambda x: np.array(x).astype(np.float32), decoder_params)
+
+    # Build list of initializers
+    initializers = [
+        numpy_helper.from_array(proprio_norm_mean, "proprio_norm_mean"),
+        numpy_helper.from_array(proprio_norm_std, "proprio_norm_std"),
+    ]
+
+    # Add decoder params as initializers
+    decoder_layer_names = ['hidden_0', 'hidden_1', 'hidden_2', 'hidden_3']
+    for i, layer_key in enumerate(decoder_layer_names):
+        if layer_key not in decoder_params_np:
+            break
+        layer = decoder_params_np[layer_key]
+        initializers.append(numpy_helper.from_array(layer['kernel'], f"dec_{layer_key}_w"))
+        initializers.append(numpy_helper.from_array(layer['bias'], f"dec_{layer_key}_b"))
+        ln_key = f'LayerNorm_{i}'
+        if ln_key in decoder_params_np:
+            ln = decoder_params_np[ln_key]
+            initializers.append(numpy_helper.from_array(ln['scale'], f"dec_ln{i}_scale"))
+            initializers.append(numpy_helper.from_array(ln['bias'], f"dec_ln{i}_bias"))
+
+    # Build computation graph
+    nodes = []
+    node_idx = 0
+
+    def make_node(op_type, inputs, outputs, name=None, **attrs):
+        nonlocal node_idx
+        if name is None:
+            name = f"node_{node_idx}"
+        node_idx += 1
+        return helper.make_node(op_type, inputs, outputs, name=name, **attrs)
+
+    # Inputs: latent (batch, 16), proprio_obs (batch, 277)
+    # 1. Normalize proprio_obs: (proprio_obs - mean) / std
+    nodes.append(make_node("Sub", ["proprio_obs", "proprio_norm_mean"], ["proprio_centered"]))
+    nodes.append(make_node("Div", ["proprio_centered", "proprio_norm_std"], ["proprio_normalized"]))
+
+    # 2. Concat [latent, proprio_normalized]
+    nodes.append(make_node("Concat", ["latent", "proprio_normalized"], ["decoder_input"], axis=1))
+
+    # 3. Decoder forward pass (same as full model)
+    x = "decoder_input"
+    for i, layer_key in enumerate(decoder_layer_names):
+        if f"dec_{layer_key}_w" not in [init.name for init in initializers]:
+            break
+
+        # Dense
+        nodes.append(make_node("MatMul", [x, f"dec_{layer_key}_w"], [f"dec_{layer_key}_mm"]))
+        nodes.append(make_node("Add", [f"dec_{layer_key}_mm", f"dec_{layer_key}_b"], [f"dec_{layer_key}_out"]))
+
+        # Check if LayerNorm exists for this layer
+        ln_scale_name = f"dec_ln{i}_scale"
+        has_ln = ln_scale_name in [init.name for init in initializers]
+
+        if has_ln:
+            # SiLU
+            nodes.append(make_node("Sigmoid", [f"dec_{layer_key}_out"], [f"dec_{layer_key}_sig"]))
+            nodes.append(make_node("Mul", [f"dec_{layer_key}_out", f"dec_{layer_key}_sig"], [f"dec_{layer_key}_silu"]))
+
+            # LayerNorm
+            nodes.append(make_node("ReduceMean", [f"dec_{layer_key}_silu"], [f"dec_ln{i}_mean"], axes=[-1], keepdims=1))
+            nodes.append(make_node("Sub", [f"dec_{layer_key}_silu", f"dec_ln{i}_mean"], [f"dec_ln{i}_centered"]))
+            nodes.append(make_node("Mul", [f"dec_ln{i}_centered", f"dec_ln{i}_centered"], [f"dec_ln{i}_sq"]))
+            nodes.append(make_node("ReduceMean", [f"dec_ln{i}_sq"], [f"dec_ln{i}_var"], axes=[-1], keepdims=1))
+
+            eps_name = f"dec_ln{i}_eps"
+            initializers.append(numpy_helper.from_array(np.array([1e-5], dtype=np.float32), eps_name))
+            nodes.append(make_node("Add", [f"dec_ln{i}_var", eps_name], [f"dec_ln{i}_var_eps"]))
+            nodes.append(make_node("Sqrt", [f"dec_ln{i}_var_eps"], [f"dec_ln{i}_std"]))
+            nodes.append(make_node("Div", [f"dec_ln{i}_centered", f"dec_ln{i}_std"], [f"dec_ln{i}_norm"]))
+            nodes.append(make_node("Mul", [f"dec_ln{i}_norm", f"dec_ln{i}_scale"], [f"dec_ln{i}_scaled"]))
+            nodes.append(make_node("Add", [f"dec_ln{i}_scaled", f"dec_ln{i}_bias"], [f"dec_{layer_key}_ln"]))
+            x = f"dec_{layer_key}_ln"
+        else:
+            x = f"dec_{layer_key}_out"
+
+    # Final output
+    nodes.append(make_node("Identity", [x], ["action_logits"]))
+
+    # Define inputs/outputs
+    inputs = [
+        helper.make_tensor_value_info("latent", TensorProto.FLOAT, [None, latent_size]),
+        helper.make_tensor_value_info("proprio_obs", TensorProto.FLOAT, [None, proprio_obs_size]),
+    ]
+    outputs = [helper.make_tensor_value_info("action_logits", TensorProto.FLOAT, [None, 76])]
+
+    # Create graph
+    graph = helper.make_graph(
+        nodes,
+        "decoder_only",
+        inputs,
+        outputs,
+        initializers,
+    )
+
+    # Create model
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+
+    return model
+
+
 def build_onnx_model(normalizer_params, encoder_params, decoder_params, cfg):
     """Build ONNX model graph manually from checkpoint weights.
 
@@ -256,17 +382,30 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     # Extract encoder and decoder params
     encoder_params, decoder_params = extract_encoder_decoder_params(network_params)
 
-    # Build ONNX model
-    print("Building ONNX model...")
+    # Build full ONNX model (encoder + decoder)
+    print("Building full ONNX model...")
     model = build_onnx_model(normalizer_params, encoder_params, decoder_params, cfg)
 
     # Check model
-    print("Checking ONNX model...")
+    print("Checking full ONNX model...")
     onnx.checker.check_model(model)
 
     # Save model
-    print(f"Saving ONNX model to: {output_path}")
+    print(f"Saving full ONNX model to: {output_path}")
     onnx.save(model, output_path)
+
+    # Build decoder-only ONNX model (for latent space random walk mode)
+    print("Building decoder-only ONNX model...")
+    decoder_model = build_decoder_only_onnx_model(normalizer_params, decoder_params, cfg)
+
+    # Check decoder model
+    print("Checking decoder-only ONNX model...")
+    onnx.checker.check_model(decoder_model)
+
+    # Save decoder model
+    decoder_output_path = str(Path(output_path).with_name("decoder_only.onnx"))
+    print(f"Saving decoder-only ONNX model to: {decoder_output_path}")
+    onnx.save(decoder_model, decoder_output_path)
 
     # Verify with ONNX Runtime
     print("Verifying with ONNX Runtime...")
@@ -299,6 +438,22 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
         print("WARNING: Large difference detected!")
     else:
         print("Verification passed!")
+
+    # Verify decoder-only model
+    print("\nVerifying decoder-only ONNX model...")
+    decoder_session = ort.InferenceSession(decoder_output_path)
+    latent_size = cfg.network_config.intention_size
+    proprio_size = cfg.network_config.proprioceptive_obs_size
+
+    test_latent = np.zeros((1, latent_size), dtype=np.float32)
+    test_proprio = np.zeros((1, proprio_size), dtype=np.float32)
+
+    decoder_output = decoder_session.run(
+        [decoder_session.get_outputs()[0].name],
+        {"latent": test_latent, "proprio_obs": test_proprio}
+    )[0]
+    print(f"Decoder-only output shape: {decoder_output.shape}")
+    print(f"Decoder-only model verified successfully!")
 
     # Save normalization parameters
     norm_params_path = Path(output_path).with_suffix(".norm.npz")

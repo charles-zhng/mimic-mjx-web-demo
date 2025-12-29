@@ -4,24 +4,39 @@ import Controls from './components/Controls'
 import { useMuJoCo } from './hooks/useMuJoCo'
 import { useONNX } from './hooks/useONNX'
 import { useMotionClips } from './hooks/useMotionClips'
-import { useSimulation } from './hooks/useSimulation'
+import { useSimulation, type InferenceMode } from './hooks/useSimulation'
 import { getAnimalConfig, defaultAnimalId } from './config/animals'
+
+export type LatentWalkInitialPose = 'default' | 'rearing'
+
+// Clip indices for initial poses in latent walk mode
+const LATENT_WALK_INITIAL_POSE_CLIPS: Record<LatentWalkInitialPose, number> = {
+  default: 2,  // Walk_4
+  rearing: 3,  // FastWalk_76
+}
 
 function App() {
   const [animalId, setAnimalId] = useState(defaultAnimalId)
   const [selectedClip, setSelectedClip] = useState(3) // clip_0280
   const [isPlaying, setIsPlaying] = useState(false)
   const [speed, setSpeed] = useState(1.0)
+  const [inferenceMode, setInferenceMode] = useState<InferenceMode>('tracking')
+  const [latentWalkInitialPose, setLatentWalkInitialPose] = useState<LatentWalkInitialPose>('default')
 
   // Get config for the selected animal (memoized to prevent unnecessary re-renders)
   const config = useMemo(() => getAnimalConfig(animalId), [animalId])
 
   const { mujoco, model, data, ghostData, isReady: mujocoReady, error: mujocoError } = useMuJoCo(config)
-  const { session, isReady: onnxReady, error: onnxError } = useONNX(config)
+  const { session, decoderSession, isReady: onnxReady, error: onnxError } = useONNX(config)
   const { clips, isReady: clipsReady, error: clipsError } = useMotionClips(config)
 
   const isReady = mujocoReady && onnxReady && clipsReady
   const error = mujocoError || onnxError || clipsError
+
+  // Determine which clip to use for initial pose
+  const initialPoseClipIndex = inferenceMode === 'latentWalk'
+    ? LATENT_WALK_INITIAL_POSE_CLIPS[latentWalkInitialPose]
+    : selectedClip
 
   const simulation = useSimulation({
     mujoco,
@@ -29,12 +44,14 @@ function App() {
     data,
     ghostData,
     session,
+    decoderSession,
     clips,
-    selectedClip,
+    selectedClip: initialPoseClipIndex,
     isPlaying,
     speed,
     isReady,
     config,
+    inferenceMode,
   })
 
   const handleReset = () => {
@@ -87,6 +104,7 @@ function App() {
           ghostData={ghostData}
           isReady={isReady}
           config={config}
+          inferenceMode={inferenceMode}
         />
 
         <Controls
@@ -98,10 +116,15 @@ function App() {
           onReset={handleReset}
           speed={speed}
           onSpeedChange={setSpeed}
+          inferenceMode={inferenceMode}
+          onModeChange={setInferenceMode}
+          latentWalkInitialPose={latentWalkInitialPose}
+          onLatentWalkInitialPoseChange={setLatentWalkInitialPose}
         />
 
         <div className="status-bar">
-          {config.name} | Frame: {simulation.currentFrame} / {clips?.[selectedClip]?.num_frames ?? 0}
+          {config.name} | {inferenceMode === 'tracking' ? 'Tracking' : 'Latent Walk'}
+          {inferenceMode === 'tracking' && ` | Frame: ${simulation.currentFrame} / ${clips?.[selectedClip]?.num_frames ?? 0}`}
           {' | '}
           Speed: {speed.toFixed(1)}x
         </div>
