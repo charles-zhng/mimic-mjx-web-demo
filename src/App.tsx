@@ -62,6 +62,13 @@ function App() {
     setIsPlaying(!isPlaying)
   }
 
+  // Handle inference mode change (reset selections to defaults)
+  const handleModeChange = (mode: InferenceMode) => {
+    setInferenceMode(mode)
+    setSelectedClip(3) // FastWalk_76
+    setLatentWalkInitialPose('default')
+  }
+
   // Handle animal change (reset everything)
   const handleAnimalChange = (newAnimalId: string) => {
     setIsPlaying(false)
@@ -117,7 +124,7 @@ function App() {
           speed={speed}
           onSpeedChange={setSpeed}
           inferenceMode={inferenceMode}
-          onModeChange={setInferenceMode}
+          onModeChange={handleModeChange}
           latentWalkInitialPose={latentWalkInitialPose}
           onLatentWalkInitialPoseChange={setLatentWalkInitialPose}
         />
