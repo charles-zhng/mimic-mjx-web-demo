@@ -72,8 +72,8 @@ export const rodentConfig: AnimalConfig = {
   },
 
   rendering: {
-    cameraPosition: [0.5, -0.5, 0.3],
-    cameraTarget: [0, 0, 0.05],
+    cameraPosition: [0, -1.2, 0.5],  // Relative offset from center
+    cameraTarget: [0, 0, 0],           // Center is computed dynamically
     orbitMinDistance: 0.1,
     orbitMaxDistance: 5,
     lightPosition: [2, -2, 5],

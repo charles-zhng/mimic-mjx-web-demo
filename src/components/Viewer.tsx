@@ -22,6 +22,7 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
   const controlsRef = useRef<OrbitControls | null>(null)
   const mujocoRendererRef = useRef<MuJoCoRenderer | null>(null)
   const animationFrameRef = useRef<number | null>(null)
+  const hasCenteredRef = useRef(false)
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -122,6 +123,39 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
 
     console.log('MuJoCo renderer created with ghost reference')
   }, [isReady, mujoco, model])
+
+  // Center camera on midpoint between rodent and ghost torsos on initial load
+  useEffect(() => {
+    if (!isReady || !data || !cameraRef.current || !controlsRef.current || hasCenteredRef.current) return
+
+    const { rendering, body } = config
+    const xpos = (data as unknown as Record<string, Float64Array>).xpos
+
+    // Get torso position (body index * 3 for x, y, z)
+    const torsoX = xpos[body.torsoIndex * 3]
+    const torsoY = xpos[body.torsoIndex * 3 + 1]
+    const torsoZ = xpos[body.torsoIndex * 3 + 2]
+
+    // Center between rodent torso and ghost torso (ghost is offset in +X)
+    const centerX = torsoX + rendering.ghostOffset / 2
+    const centerY = torsoY
+    const centerZ = torsoZ
+
+    // Update camera target to center on both bodies
+    controlsRef.current.target.set(centerX, centerY, centerZ)
+
+    // Position camera relative to the new center
+    const [camOffsetX, camOffsetY, camOffsetZ] = rendering.cameraPosition
+    const [targetOffsetX, targetOffsetY, targetOffsetZ] = rendering.cameraTarget
+    cameraRef.current.position.set(
+      centerX + (camOffsetX - targetOffsetX),
+      centerY + (camOffsetY - targetOffsetY),
+      centerZ + (camOffsetZ - targetOffsetZ)
+    )
+
+    controlsRef.current.update()
+    hasCenteredRef.current = true
+  }, [isReady, data, config])
 
   // Render loop
   useEffect(() => {
