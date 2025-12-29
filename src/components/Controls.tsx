@@ -46,8 +46,8 @@ export default function Controls({
           value={inferenceMode}
           options={[
             { value: 'tracking', label: 'Motion Tracking' },
-            { value: 'latentWalk', label: 'Latent Random Walk (OU process)' },
             { value: 'latentNoise', label: 'Latent Random Noise (independent)' },
+            { value: 'latentWalk', label: 'Latent Random Walk (OU process)' },
           ]}
           onChange={(value) => onModeChange(value as InferenceMode)}
         />
