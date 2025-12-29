@@ -21,6 +21,7 @@ interface UseSimulationProps {
   isReady: boolean
   config: AnimalConfig
   inferenceMode: InferenceMode
+  noiseMagnitude: number
 }
 
 // Ornstein-Uhlenbeck process state
@@ -70,6 +71,7 @@ export function useSimulation({
   isReady,
   config,
   inferenceMode,
+  noiseMagnitude,
 }: UseSimulationProps): SimulationState {
   const [currentFrame, setCurrentFrame] = useState(0)
   const animationRef = useRef<number | null>(null)
@@ -234,9 +236,9 @@ export function useSimulation({
             ouStateRef.current.initialized = true
           }
 
-          // Step OU process
+          // Step OU process (sigma scaled by noiseMagnitude)
           const { ouTheta, ouMu, ouSigma } = config.latentSpace
-          stepOUProcess(ouStateRef.current.x, config.timing.ctrlDt, ouTheta, ouMu, ouSigma)
+          stepOUProcess(ouStateRef.current.x, config.timing.ctrlDt, ouTheta, ouMu, ouSigma * noiseMagnitude)
 
           // Build proprioceptive-only observation
           const proprioObs = buildProprioceptiveObservation(
@@ -308,7 +310,7 @@ export function useSimulation({
         animationRef.current = null
       }
     }
-  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, clips, selectedClip, speed, reset, config, inferenceMode])
+  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, clips, selectedClip, speed, reset, config, inferenceMode, noiseMagnitude])
 
   return {
     currentFrame,

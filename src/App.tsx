@@ -22,6 +22,7 @@ function App() {
   const [speed, setSpeed] = useState(1.0)
   const [inferenceMode, setInferenceMode] = useState<InferenceMode>('tracking')
   const [latentWalkInitialPose, setLatentWalkInitialPose] = useState<LatentWalkInitialPose>('default')
+  const [noiseMagnitude, setNoiseMagnitude] = useState(1.0)
 
   // Get config for the selected animal (memoized to prevent unnecessary re-renders)
   const config = useMemo(() => getAnimalConfig(animalId), [animalId])
@@ -52,6 +53,7 @@ function App() {
     isReady,
     config,
     inferenceMode,
+    noiseMagnitude,
   })
 
   const handleReset = () => {
@@ -127,6 +129,8 @@ function App() {
           onModeChange={handleModeChange}
           latentWalkInitialPose={latentWalkInitialPose}
           onLatentWalkInitialPoseChange={setLatentWalkInitialPose}
+          noiseMagnitude={noiseMagnitude}
+          onNoiseMagnitudeChange={setNoiseMagnitude}
         />
 
         <div className="status-bar">

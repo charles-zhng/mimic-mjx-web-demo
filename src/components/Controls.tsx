@@ -16,6 +16,8 @@ interface ControlsProps {
   onModeChange: (mode: InferenceMode) => void
   latentWalkInitialPose: LatentWalkInitialPose
   onLatentWalkInitialPoseChange: (pose: LatentWalkInitialPose) => void
+  noiseMagnitude: number
+  onNoiseMagnitudeChange: (magnitude: number) => void
 }
 
 export default function Controls({
@@ -31,6 +33,8 @@ export default function Controls({
   onModeChange,
   latentWalkInitialPose,
   onLatentWalkInitialPoseChange,
+  noiseMagnitude,
+  onNoiseMagnitudeChange,
 }: ControlsProps) {
   return (
     <div className="controls-panel">
@@ -42,7 +46,7 @@ export default function Controls({
           value={inferenceMode}
           options={[
             { value: 'tracking', label: 'Motion Tracking' },
-            { value: 'latentWalk', label: 'Latent Random Walk' },
+            { value: 'latentWalk', label: 'Latent Random Walk (OU process)' },
           ]}
           onChange={(value) => onModeChange(value as InferenceMode)}
         />
@@ -72,6 +76,22 @@ export default function Controls({
             ]}
             onChange={(value) => onLatentWalkInitialPoseChange(value as LatentWalkInitialPose)}
           />
+        </div>
+      )}
+
+      {inferenceMode === 'latentWalk' && (
+        <div className="control-group">
+          <label>Noise: {noiseMagnitude.toFixed(1)}x</label>
+          <input
+            type="range"
+            min="0"
+            max="2.0"
+            step="0.1"
+            value={noiseMagnitude}
+            onChange={(e) => onNoiseMagnitudeChange(Number(e.target.value))}
+            style={{ '--fill-percent': `${(noiseMagnitude / 2.0) * 100}%` } as React.CSSProperties}
+          />
+          <div className="speed-display">0x — 2.0x</div>
         </div>
       )}
 
