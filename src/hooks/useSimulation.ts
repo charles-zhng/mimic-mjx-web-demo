@@ -144,12 +144,12 @@ export function useSimulation({
     console.log('Simulation reset to clip:', clip.name)
   }, [mujoco, model, data, ghostData, clips, selectedClip, config.action.size])
 
-  // Reset when clip changes
+  // Reset when clip or inference mode changes
   useEffect(() => {
     if (isReady && clips) {
       reset()
     }
-  }, [isReady, selectedClip, clips, reset])
+  }, [isReady, selectedClip, clips, reset, inferenceMode])
 
   // Main simulation loop
   useEffect(() => {

@@ -35,7 +35,7 @@ function App() {
   const error = mujocoError || onnxError || clipsError
 
   // Determine which clip to use for initial pose
-  const initialPoseClipIndex = inferenceMode === 'latentWalk'
+  const initialPoseClipIndex = (inferenceMode === 'latentWalk' || inferenceMode === 'latentNoise')
     ? LATENT_WALK_INITIAL_POSE_CLIPS[latentWalkInitialPose]
     : selectedClip
 
@@ -69,6 +69,7 @@ function App() {
     setInferenceMode(mode)
     setSelectedClip(3) // FastWalk_76
     setLatentWalkInitialPose('default')
+    setNoiseMagnitude(1.0)
   }
 
   // Handle animal change (reset everything)
