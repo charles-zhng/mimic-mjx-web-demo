@@ -86,6 +86,7 @@ function App() {
           data={data}
           ghostData={ghostData}
           isReady={isReady}
+          config={config}
         />
 
         <Controls

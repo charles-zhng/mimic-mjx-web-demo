@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js'
 import type { MainModule, MjModel, MjData } from '../types'
+import type { AnimalConfig } from '../types/animal-config'
 import { MuJoCoRenderer } from '../lib/mujoco-renderer'
 
 interface ViewerProps {
@@ -10,9 +11,10 @@ interface ViewerProps {
   data: MjData | null
   ghostData: MjData | null
   isReady: boolean
+  config: AnimalConfig
 }
 
-export default function Viewer({ mujoco, model, data, ghostData, isReady }: ViewerProps) {
+export default function Viewer({ mujoco, model, data, ghostData, isReady, config }: ViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
@@ -24,6 +26,8 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady }: View
   // Initialize Three.js scene
   useEffect(() => {
     if (!containerRef.current) return
+
+    const { rendering } = config
 
     // Scene
     const scene = new THREE.Scene()
@@ -37,9 +41,9 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady }: View
       0.01,
       100
     )
-    camera.position.set(0.5, -0.5, 0.3)
+    camera.position.set(...rendering.cameraPosition)
     camera.up.set(0, 0, 1) // Z-up to match MuJoCo
-    camera.lookAt(0, 0, 0.05)
+    camera.lookAt(...rendering.cameraTarget)
     cameraRef.current = camera
 
     // Renderer
@@ -53,11 +57,11 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady }: View
 
     // Controls
     const controls = new OrbitControls(camera, renderer.domElement)
-    controls.target.set(0, 0, 0.05)
+    controls.target.set(...rendering.cameraTarget)
     controls.enableDamping = true
     controls.dampingFactor = 0.05
-    controls.minDistance = 0.1
-    controls.maxDistance = 5
+    controls.minDistance = rendering.orbitMinDistance
+    controls.maxDistance = rendering.orbitMaxDistance
     controls.update()
     controlsRef.current = controls
 
@@ -66,16 +70,16 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady }: View
     scene.add(ambientLight)
 
     const directionalLight = new THREE.DirectionalLight(0xffffff, 1)
-    directionalLight.position.set(2, -2, 5) // Adjusted for Z-up
+    directionalLight.position.set(...rendering.lightPosition)
     directionalLight.castShadow = true
     directionalLight.shadow.mapSize.width = 2048
     directionalLight.shadow.mapSize.height = 2048
     directionalLight.shadow.camera.near = 0.1
     directionalLight.shadow.camera.far = 20
-    directionalLight.shadow.camera.left = -2
-    directionalLight.shadow.camera.right = 2
-    directionalLight.shadow.camera.top = 2
-    directionalLight.shadow.camera.bottom = -2
+    directionalLight.shadow.camera.left = -rendering.shadowBounds
+    directionalLight.shadow.camera.right = rendering.shadowBounds
+    directionalLight.shadow.camera.top = rendering.shadowBounds
+    directionalLight.shadow.camera.bottom = -rendering.shadowBounds
     scene.add(directionalLight)
 
     // Handle resize
@@ -99,7 +103,7 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady }: View
       renderer.dispose()
       containerRef.current?.removeChild(renderer.domElement)
     }
-  }, [])
+  }, [config])
 
   // Create MuJoCo renderer when model is ready
   useEffect(() => {

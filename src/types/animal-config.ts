@@ -81,6 +81,24 @@ export interface AnimalConfig {
     /** Motion capture frame rate in Hz (e.g., 50) */
     mocapHz: number
   }
+
+  // Rendering configuration (scale-dependent values)
+  rendering: {
+    /** Initial camera position [x, y, z] */
+    cameraPosition: [number, number, number]
+    /** Camera look-at target [x, y, z] */
+    cameraTarget: [number, number, number]
+    /** Minimum orbit distance */
+    orbitMinDistance: number
+    /** Maximum orbit distance */
+    orbitMaxDistance: number
+    /** Directional light position [x, y, z] */
+    lightPosition: [number, number, number]
+    /** Shadow camera bounds (symmetric: -bounds to +bounds) */
+    shadowBounds: number
+    /** Ghost reference X offset in meters */
+    ghostOffset: number
+  }
 }
 
 /** Derive model body indices from reference indices */

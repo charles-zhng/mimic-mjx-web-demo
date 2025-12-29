@@ -70,4 +70,14 @@ export const rodentConfig: AnimalConfig = {
     ctrlDt: 0.01,    // 100Hz control
     mocapHz: 50,     // 50Hz motion capture
   },
+
+  rendering: {
+    cameraPosition: [0.5, -0.5, 0.3],
+    cameraTarget: [0, 0, 0.05],
+    orbitMinDistance: 0.1,
+    orbitMaxDistance: 5,
+    lightPosition: [2, -2, 5],
+    shadowBounds: 2,
+    ghostOffset: 0.3,
+  },
 }

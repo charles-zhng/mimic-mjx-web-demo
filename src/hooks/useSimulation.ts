@@ -5,9 +5,6 @@ import type { AnimalConfig } from '../types/animal-config'
 import { runInference, extractActionInto } from './useONNX'
 import { buildObservation } from '../lib/observation'
 
-// Ghost reference offset in meters (+X direction = side by side)
-const GHOST_OFFSET_X = 0.3
-
 interface UseSimulationProps {
   mujoco: MainModule | null
   model: MjModel | null
@@ -79,7 +76,7 @@ export function useSimulation({
       for (let i = 0; i < Math.min(refQpos.length, model.nq); i++) {
         ghostQpos[i] = refQpos[i]
       }
-      ghostQpos[0] += GHOST_OFFSET_X  // Apply X offset
+      ghostQpos[0] += config.rendering.ghostOffset  // Apply X offset
       const ghostQvel = ghostData.qvel as unknown as Float64Array
       for (let i = 0; i < model.nv; i++) {
         ghostQvel[i] = 0
@@ -182,7 +179,7 @@ export function useSimulation({
           }
 
           // Apply root offset (+X direction for side-by-side view)
-          ghostQpos[0] += GHOST_OFFSET_X
+          ghostQpos[0] += config.rendering.ghostOffset
 
           // Zero velocities
           const ghostQvel = ghostData.qvel as unknown as Float64Array
