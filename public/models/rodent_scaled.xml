@@ -112,11 +112,11 @@
         <general gainprm="0.2"/>
       </default>
       <default class="ankle-rodent">
-        <joint range="-0.139626 1.39626" damping="0.003"/>
+        <joint range="-0.1 2.0" damping="0.003"/>
         <general gainprm="0.2"/>
       </default>
       <default class="toe-rodent">
-        <joint range="0 0.872665"/>
+        <joint range="-0.7 0.87"/>
         <general gainprm="0.025"/>
       </default>
       <default class="scapula-rodent">
