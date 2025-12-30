@@ -13,8 +13,8 @@ npm run preview  # Preview production build
 
 Python scripts (for data prep):
 ```bash
+./scripts/update_checkpoint.sh /path/to/checkpoint  # Update neural network from JAX checkpoint
 /Users/charles/MIMIC-MJX/track-mjx/.venv/bin/python scripts/export_motions.py --input /path/to/clips.h5 --output public/motions/clips.json --num-clips 10
-/Users/charles/MIMIC-MJX/track-mjx/.venv/bin/python scripts/convert_checkpoint.py  # JAX checkpoint to ONNX
 ```
 
 ## Architecture
