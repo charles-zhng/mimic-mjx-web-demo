@@ -60,6 +60,9 @@ function stepOUProcess(
   }
 }
 
+// Maximum control steps per browser frame to prevent lockups
+const MAX_STEPS_PER_FRAME = 10
+
 export function useSimulation({
   mujoco,
   model,
@@ -84,6 +87,9 @@ export function useSimulation({
   const accumulatedTimeRef = useRef<number>(0)
   const prevActionRef = useRef<Float32Array>(new Float32Array(config.action.size))
 
+  // Pre-allocated buffer for latent noise mode
+  const latentNoiseRef = useRef<Float32Array>(new Float32Array(config.latentSpace?.size ?? 16))
+
   // OU process state for latent walk mode
   const ouStateRef = useRef<OUState>({
     x: new Float32Array(config.latentSpace?.size ?? 16),
@@ -103,9 +109,6 @@ export function useSimulation({
     // Get qpos array
     const qpos = data.qpos as unknown as Float64Array
     const refQpos = clip.qpos[0]
-
-    // Debug: log qpos dimensions
-    console.log('Model nq:', model.nq, 'Reference qpos length:', refQpos.length)
 
     // Copy reference qpos to MuJoCo (only up to model.nq)
     for (let i = 0; i < Math.min(refQpos.length, model.nq); i++) {
@@ -145,8 +148,6 @@ export function useSimulation({
     // Reset OU state for latent walk mode
     ouStateRef.current.x.fill(0)
     ouStateRef.current.initialized = false
-
-    console.log('Simulation reset to clip:', clip.name)
   }, [mujoco, model, data, ghostData, clips, selectedClip, config.action.size])
 
   // Reset when clip or inference mode changes
@@ -170,6 +171,22 @@ export function useSimulation({
 
     const clip = clips?.[selectedClip]
 
+    // Cache physics stepping parameters (computed once per effect)
+    const modelOpt = (model as unknown as { opt: { timestep: number } }).opt
+    const numSubsteps = modelOpt?.timestep ? Math.round(config.timing.ctrlDt / modelOpt.timestep) : 5
+    const ctrl = data.ctrl as unknown as Float64Array
+
+    // Helper: apply action to ctrl and step physics
+    const applyActionAndStep = (logits: Float32Array) => {
+      extractActionInto(prevActionRef.current, logits)
+      for (let i = 0; i < model.nu; i++) {
+        ctrl[i] = prevActionRef.current[i]
+      }
+      for (let i = 0; i < numSubsteps; i++) {
+        mujoco.mj_step(model, data)
+      }
+    }
+
     const simulate = async (timestamp: number) => {
       // Calculate delta time
       if (lastTimeRef.current === 0) {
@@ -179,19 +196,17 @@ export function useSimulation({
       lastTimeRef.current = timestamp
       accumulatedTimeRef.current += deltaTime
 
-      // Calculate current frame (for tracking mode display)
-      const frameTime = accumulatedTimeRef.current
-      const newFrame = Math.floor(frameTime * config.timing.mocapHz)
+      const targetSimTime = accumulatedTimeRef.current
 
       try {
-        let logits: Float32Array
         let latent: Float32Array | null = null
 
         if (inferenceMode === 'tracking' && clip && session) {
           // === TRACKING MODE ===
+          const targetFrame = Math.floor(targetSimTime * config.timing.mocapHz)
+
           // Check if we've reached the end of the clip
-          if (newFrame >= clip.num_frames - config.obs.referenceLength) {
-            // Loop back to start
+          if (targetFrame >= clip.num_frames - config.obs.referenceLength) {
             accumulatedTimeRef.current = 0
             setCurrentFrame(0)
             reset()
@@ -199,39 +214,33 @@ export function useSimulation({
             return
           }
 
-          setCurrentFrame(newFrame)
+          // Run control steps until physics catches up with target time
+          let stepsThisFrame = 0
+          while ((data.time as number) < targetSimTime && stepsThisFrame < MAX_STEPS_PER_FRAME) {
+            stepsThisFrame++
 
-          // Build full observation
-          const obs = buildObservation(
-            mujoco,
-            model,
-            data,
-            clip,
-            newFrame,
-            prevActionRef.current,
-            config
-          )
+            const physicsFrame = Math.floor((data.time as number) * config.timing.mocapHz)
+            const obs = buildObservation(mujoco, model, data, clip, physicsFrame, prevActionRef.current, config)
+            const result = await runInference(session, obs)
+            latent = result.latent
+            applyActionAndStep(result.logits)
+          }
 
-          // Run full inference (returns both logits and latent)
-          const result = await runInference(session, obs)
-          logits = result.logits
-          latent = result.latent
+          setCurrentFrame(targetFrame)
 
-          // Emit visualization data
+          // Emit visualization data (once per browser frame)
           if (onVisualizationData && latent) {
             const qpos = data.qpos as unknown as Float64Array
             const qvel = data.qvel as unknown as Float64Array
             const sensordata = data.sensordata as unknown as Float64Array
-            const refQpos = clip.qpos[newFrame]
-            const refQvel = clip.qvel?.[newFrame]
-
-            // Get joint angle and velocity for selected joint (offset by 7 for root pose)
+            const refQpos = clip.qpos[targetFrame]
+            const refQvel = clip.qvel?.[targetFrame]
             const jointQposIndex = 7 + selectedJointIndex
             const jointQvelIndex = 6 + selectedJointIndex
 
             onVisualizationData({
               timestamp: data.time as number,
-              frame: newFrame,
+              frame: targetFrame,
               jointAngle: {
                 current: qpos[jointQposIndex] ?? 0,
                 reference: refQpos?.[jointQposIndex] ?? 0,
@@ -240,7 +249,6 @@ export function useSimulation({
                 current: qvel[jointQvelIndex] ?? 0,
                 reference: refQvel?.[jointQvelIndex] ?? 0,
               },
-              // Touch sensors are at indices 9-12 in sensordata
               touchSensors: [
                 sensordata[9] ?? 0,
                 sensordata[10] ?? 0,
@@ -251,11 +259,10 @@ export function useSimulation({
             })
           }
 
-          // Update ghost reference pose (kinematics only, no physics)
+          // Update ghost reference pose
           if (ghostData) {
-            const refQpos = clip.qpos[newFrame]
+            const refQpos = clip.qpos[targetFrame]
             const ghostQpos = ghostData.qpos as unknown as Float64Array
-
             for (let i = 0; i < Math.min(refQpos.length, model.nq); i++) {
               ghostQpos[i] = refQpos[i]
             }
@@ -265,104 +272,54 @@ export function useSimulation({
             for (let i = 0; i < model.nv; i++) {
               ghostQvel[i] = 0
             }
-
             mujoco.mj_forward(model, ghostData)
           }
         } else if (inferenceMode === 'latentWalk' && decoderSession && config.latentSpace) {
           // === LATENT WALK MODE ===
-          // No frame tracking in latent walk mode - runs indefinitely
-          setCurrentFrame(Math.floor(accumulatedTimeRef.current * config.timing.mocapHz))
-
-          // Initialize OU state if needed
           if (!ouStateRef.current.initialized) {
             ouStateRef.current.x.fill(0)
             ouStateRef.current.initialized = true
           }
 
-          // Step OU process (sigma scaled by noiseMagnitude)
           const { ouTheta, ouMu, ouSigma } = config.latentSpace
-          stepOUProcess(ouStateRef.current.x, config.timing.ctrlDt, ouTheta, ouMu, ouSigma * noiseMagnitude)
+          let stepsThisFrame = 0
 
-          // Build proprioceptive-only observation
-          const proprioObs = buildProprioceptiveObservation(
-            mujoco,
-            model,
-            data,
-            prevActionRef.current,
-            config
-          )
+          while ((data.time as number) < targetSimTime && stepsThisFrame < MAX_STEPS_PER_FRAME) {
+            stepsThisFrame++
+            stepOUProcess(ouStateRef.current.x, config.timing.ctrlDt, ouTheta, ouMu, ouSigma * noiseMagnitude)
+            const proprioObs = buildProprioceptiveObservation(mujoco, model, data, prevActionRef.current, config)
+            const logits = await runDecoderInference(decoderSession, ouStateRef.current.x, proprioObs)
+            applyActionAndStep(logits)
+          }
 
-          // Run decoder inference
-          logits = await runDecoderInference(decoderSession, ouStateRef.current.x, proprioObs)
+          setCurrentFrame(Math.floor(targetSimTime * config.timing.mocapHz))
         } else if (inferenceMode === 'latentNoise' && decoderSession && config.latentSpace) {
-          // === LATENT NOISE MODE (independent) ===
-          // Sample independent Gaussian noise at each step
-          setCurrentFrame(Math.floor(accumulatedTimeRef.current * config.timing.mocapHz))
+          // === LATENT NOISE MODE ===
+          const latentNoise = latentNoiseRef.current
+          const noiseScale = config.latentSpace.ouSigma * noiseMagnitude
+          let stepsThisFrame = 0
 
-          // Generate independent Gaussian noise for latent space
-          const latentNoise = new Float32Array(config.latentSpace.size)
-          for (let i = 0; i < latentNoise.length; i++) {
-            latentNoise[i] = gaussianRandom() * config.latentSpace.ouSigma * noiseMagnitude
+          while ((data.time as number) < targetSimTime && stepsThisFrame < MAX_STEPS_PER_FRAME) {
+            stepsThisFrame++
+
+            // Generate noise into pre-allocated buffer
+            for (let i = 0; i < latentNoise.length; i++) {
+              latentNoise[i] = gaussianRandom() * noiseScale
+            }
+
+            const proprioObs = buildProprioceptiveObservation(mujoco, model, data, prevActionRef.current, config)
+            const logits = await runDecoderInference(decoderSession, latentNoise, proprioObs)
+            applyActionAndStep(logits)
           }
 
-          // Build proprioceptive-only observation
-          const proprioObs = buildProprioceptiveObservation(
-            mujoco,
-            model,
-            data,
-            prevActionRef.current,
-            config
-          )
-
-          // Run decoder inference
-          logits = await runDecoderInference(decoderSession, latentNoise, proprioObs)
-        } else {
-          // Should not reach here
-          animationRef.current = requestAnimationFrame(simulate)
-          return
+          setCurrentFrame(Math.floor(targetSimTime * config.timing.mocapHz))
         }
 
-        // Extract action (tanh of mean) into pre-allocated buffer
-        extractActionInto(prevActionRef.current, logits)
-
-        // Apply action to MuJoCo control
-        const ctrl = data.ctrl as unknown as Float64Array
-        const action = prevActionRef.current
-        for (let i = 0; i < model.nu; i++) {
-          ctrl[i] = action[i]
-        }
-
-        // Step the simulation
-        const modelOpt = (model as unknown as { opt: { timestep: number } }).opt
-        const numSubsteps = modelOpt?.timestep ? Math.round(config.timing.ctrlDt / modelOpt.timestep) : 5
-        for (let i = 0; i < numSubsteps; i++) {
-          mujoco.mj_step(model, data)
-        }
-
-        // Debug logging
-        if ((globalThis as unknown as Record<string, boolean>).__SIM_DEBUG__) {
-          const xpos = data.xpos as unknown as Float64Array
-          const torsoZ = xpos[config.body.torsoIndex * 3 + 2]
-
-          const heights = ((globalThis as unknown as Record<string, number[]>).__HEIGHTS__ ||= [])
-          const frames = ((globalThis as unknown as Record<string, number[]>).__FRAMES__ ||= [])
-          heights.push(torsoZ)
-          frames.push(newFrame)
-
-          if (heights.length <= 50 && heights.length % 5 === 0) {
-            console.log(`Iteration ${heights.length}: frame=${newFrame}, torso=${torsoZ.toFixed(4)}, accTime=${accumulatedTimeRef.current.toFixed(3)}`)
-          }
-          if (heights.length === 50) {
-            console.log('Heights:', heights.map(h => h.toFixed(3)).join(', '))
-            console.log('Frames:', frames.join(', '))
-          }
-        }
+        animationRef.current = requestAnimationFrame(simulate)
       } catch (e) {
         console.error('Simulation step error:', e)
+        animationRef.current = requestAnimationFrame(simulate)
       }
-
-      // Continue loop
-      animationRef.current = requestAnimationFrame(simulate)
     }
 
     // Start simulation loop
