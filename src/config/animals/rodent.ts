@@ -21,7 +21,7 @@ export const rodentConfig: AnimalConfig = {
   assets: {
     modelPath: '/models/rodent_scaled.xml',
     skinPath: '/models/rodent_walker_skin.skn',
-    onnxPath: '/nn/intention_network.onnx?v=3',
+    onnxPath: '/nn/intention_network.onnx?v=4',
     decoderOnnxPath: '/nn/decoder_only.onnx',
     clipsPath: '/motions/clips.json',
   },
