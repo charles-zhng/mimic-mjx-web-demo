@@ -71,19 +71,28 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
 }
 
 /**
+ * Result from policy network inference.
+ */
+export interface InferenceResult {
+  logits: Float32Array
+  latent: Float32Array
+}
+
+/**
  * Run inference on the policy network.
  * Input: observation vector (size from config.obs.totalSize)
- * Output: logits (action means + action log_stds)
+ * Output: logits (action means + action log_stds) and latent vector
  */
 export async function runInference(
   session: ort.InferenceSession,
   observation: Float32Array
-): Promise<Float32Array> {
+): Promise<InferenceResult> {
   const inputTensor = new ort.Tensor('float32', observation, [1, observation.length])
   const feeds = { obs: inputTensor }
   const results = await session.run(feeds)
-  const output = results[session.outputNames[0]]
-  return output.data as Float32Array
+  const logits = results['action_logits'].data as Float32Array
+  const latent = results['latent_mean'].data as Float32Array
+  return { logits, latent }
 }
 
 /**

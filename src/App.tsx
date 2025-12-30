@@ -1,11 +1,13 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import Viewer from './components/Viewer'
 import Controls from './components/Controls'
+import AnalysisPanel from './components/AnalysisPanel'
 import { useMuJoCo } from './hooks/useMuJoCo'
 import { useONNX } from './hooks/useONNX'
 import { useMotionClips } from './hooks/useMotionClips'
 import { useSimulation, type InferenceMode } from './hooks/useSimulation'
 import { getAnimalConfig, defaultAnimalId } from './config/animals'
+import type { VisualizationData, VisualizationHistory } from './types/visualization'
 
 export type LatentWalkInitialPose = 'default' | 'rearing'
 
@@ -24,6 +26,14 @@ function App() {
   const [latentWalkInitialPose, setLatentWalkInitialPose] = useState<LatentWalkInitialPose>('default')
   const [noiseMagnitude, setNoiseMagnitude] = useState(1.0)
 
+  // Analysis panel state
+  const [showAnalysis, setShowAnalysis] = useState(false)
+  const [selectedJointIndex, setSelectedJointIndex] = useState(8) // hip_L_extend
+  const [vizHistory, setVizHistory] = useState<VisualizationHistory>({
+    data: [],
+    maxLength: 200, // ~2 seconds at 100Hz
+  })
+
   // Get config for the selected animal (memoized to prevent unnecessary re-renders)
   const config = useMemo(() => getAnimalConfig(animalId), [animalId])
 
@@ -38,6 +48,19 @@ function App() {
   const initialPoseClipIndex = (inferenceMode === 'latentWalk' || inferenceMode === 'latentNoise')
     ? LATENT_WALK_INITIAL_POSE_CLIPS[latentWalkInitialPose]
     : selectedClip
+
+  // Visualization data callback
+  const handleVisualizationData = useCallback((vizData: VisualizationData) => {
+    setVizHistory((prev) => ({
+      ...prev,
+      data: [...prev.data.slice(-(prev.maxLength - 1)), vizData],
+    }))
+  }, [])
+
+  // Clear visualization history when clip changes or simulation resets
+  const clearVizHistory = useCallback(() => {
+    setVizHistory((prev) => ({ ...prev, data: [] }))
+  }, [])
 
   const simulation = useSimulation({
     mujoco,
@@ -54,10 +77,13 @@ function App() {
     config,
     inferenceMode,
     noiseMagnitude,
+    selectedJointIndex,
+    onVisualizationData: inferenceMode === 'tracking' && showAnalysis ? handleVisualizationData : undefined,
   })
 
   const handleReset = () => {
     simulation.reset()
+    clearVizHistory()
   }
 
   const handleTogglePlay = () => {
@@ -133,6 +159,16 @@ function App() {
           noiseMagnitude={noiseMagnitude}
           onNoiseMagnitudeChange={setNoiseMagnitude}
         />
+
+        {inferenceMode === 'tracking' && (
+          <AnalysisPanel
+            history={vizHistory}
+            selectedJointIndex={selectedJointIndex}
+            onJointChange={setSelectedJointIndex}
+            isVisible={showAnalysis}
+            onToggle={() => setShowAnalysis(!showAnalysis)}
+          />
+        )}
 
         <div className="status-bar">
           {config.name} | {inferenceMode === 'tracking' ? 'Tracking' : 'Latent Walk'}

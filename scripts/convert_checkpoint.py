@@ -330,7 +330,10 @@ def build_onnx_model(normalizer_params, encoder_params, decoder_params, cfg):
 
     # Define input/output
     inputs = [helper.make_tensor_value_info("obs", TensorProto.FLOAT, [None, obs_size])]
-    outputs = [helper.make_tensor_value_info("action_logits", TensorProto.FLOAT, [None, 76])]
+    outputs = [
+        helper.make_tensor_value_info("action_logits", TensorProto.FLOAT, [None, 76]),
+        helper.make_tensor_value_info("latent_mean", TensorProto.FLOAT, [None, cfg.network_config.intention_size]),
+    ]
 
     # Create graph
     graph = helper.make_graph(

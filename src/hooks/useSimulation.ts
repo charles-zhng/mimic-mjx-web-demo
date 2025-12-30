@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import type { InferenceSession } from 'onnxruntime-web'
 import type { MainModule, MjModel, MjData, MotionClip, SimulationState } from '../types'
 import type { AnimalConfig } from '../types/animal-config'
+import type { VisualizationData } from '../types/visualization'
 import { runInference, runDecoderInference, extractActionInto } from './useONNX'
 import { buildObservation, buildProprioceptiveObservation } from '../lib/observation'
 
@@ -22,6 +23,8 @@ interface UseSimulationProps {
   config: AnimalConfig
   inferenceMode: InferenceMode
   noiseMagnitude: number
+  selectedJointIndex: number
+  onVisualizationData?: (data: VisualizationData) => void
 }
 
 // Ornstein-Uhlenbeck process state
@@ -72,6 +75,8 @@ export function useSimulation({
   config,
   inferenceMode,
   noiseMagnitude,
+  selectedJointIndex,
+  onVisualizationData,
 }: UseSimulationProps): SimulationState {
   const [currentFrame, setCurrentFrame] = useState(0)
   const animationRef = useRef<number | null>(null)
@@ -180,6 +185,7 @@ export function useSimulation({
 
       try {
         let logits: Float32Array
+        let latent: Float32Array | null = null
 
         if (inferenceMode === 'tracking' && clip && session) {
           // === TRACKING MODE ===
@@ -206,8 +212,44 @@ export function useSimulation({
             config
           )
 
-          // Run full inference
-          logits = await runInference(session, obs)
+          // Run full inference (returns both logits and latent)
+          const result = await runInference(session, obs)
+          logits = result.logits
+          latent = result.latent
+
+          // Emit visualization data
+          if (onVisualizationData && latent) {
+            const qpos = data.qpos as unknown as Float64Array
+            const qvel = data.qvel as unknown as Float64Array
+            const sensordata = data.sensordata as unknown as Float64Array
+            const refQpos = clip.qpos[newFrame]
+            const refQvel = clip.qvel?.[newFrame]
+
+            // Get joint angle and velocity for selected joint (offset by 7 for root pose)
+            const jointQposIndex = 7 + selectedJointIndex
+            const jointQvelIndex = 6 + selectedJointIndex
+
+            onVisualizationData({
+              timestamp: data.time as number,
+              frame: newFrame,
+              jointAngle: {
+                current: qpos[jointQposIndex] ?? 0,
+                reference: refQpos?.[jointQposIndex] ?? 0,
+              },
+              jointVelocity: {
+                current: qvel[jointQvelIndex] ?? 0,
+                reference: refQvel?.[jointQvelIndex] ?? 0,
+              },
+              // Touch sensors are at indices 9-12 in sensordata
+              touchSensors: [
+                sensordata[9] ?? 0,
+                sensordata[10] ?? 0,
+                sensordata[11] ?? 0,
+                sensordata[12] ?? 0,
+              ],
+              latent: new Float32Array(latent),
+            })
+          }
 
           // Update ghost reference pose (kinematics only, no physics)
           if (ghostData) {
@@ -333,7 +375,7 @@ export function useSimulation({
         animationRef.current = null
       }
     }
-  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, clips, selectedClip, speed, reset, config, inferenceMode, noiseMagnitude])
+  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, clips, selectedClip, speed, reset, config, inferenceMode, noiseMagnitude, selectedJointIndex, onVisualizationData])
 
   return {
     currentFrame,
