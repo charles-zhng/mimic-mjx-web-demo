@@ -387,10 +387,10 @@ html, body, #root {
   position: absolute;
   top: 16px;
   right: 16px;
-  width: 240px;
+  width: 300px;
   background: rgba(0, 0, 0, 0.85);
   border-radius: 8px;
-  padding: 16px;
+  padding: 16px 16px 10px 16px;
   z-index: 100;
   max-height: calc(100vh - 100px);
   overflow-y: auto;
@@ -398,7 +398,7 @@ html, body, #root {
 }
 
 .analysis-panel.collapsed {
-  transform: translateX(260px);
+  transform: translateX(320px);
   opacity: 0;
   pointer-events: none;
 }

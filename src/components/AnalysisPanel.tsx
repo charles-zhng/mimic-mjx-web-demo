@@ -107,8 +107,8 @@ export default function AnalysisPanel({
           <div className="chart-container">
             <LineChart
               lines={jointAngleData}
-              width={200}
-              height={80}
+              width={268}
+              height={100}
               yLabel="rad"
               showLegend={true}
             />
@@ -123,8 +123,8 @@ export default function AnalysisPanel({
               data={contactData}
               labels={contactLabels}
               colors={contactColors}
-              width={200}
-              height={56}
+              width={268}
+              height={72}
             />
           </div>
         </div>
@@ -136,7 +136,7 @@ export default function AnalysisPanel({
             <div className="chart-container">
               <ScatterPlot
                 points={latentPoints}
-                width={200}
+                width={268}
                 height={150}
                 xLabel={`dim ${latentXDim}`}
                 yLabel={`dim ${latentYDim}`}
