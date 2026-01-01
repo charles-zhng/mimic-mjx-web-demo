@@ -1,9 +1,8 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import type { InferenceSession } from 'onnxruntime-web'
 import type { MainModule, MjModel, MjData, MotionClip, SimulationState } from '../types'
 import type { AnimalConfig } from '../types/animal-config'
 import type { VisualizationData } from '../types/visualization'
-import { runInference, runDecoderInference, extractActionInto } from './useONNX'
+import { runInference, runDecoderInference, extractActionInto, type JaxSession } from './useONNX'
 import { buildObservation, buildProprioceptiveObservation } from '../lib/observation'
 
 export type InferenceMode = 'tracking' | 'latentWalk' | 'latentNoise'
@@ -13,8 +12,8 @@ interface UseSimulationProps {
   model: MjModel | null
   data: MjData | null
   ghostData: MjData | null
-  session: InferenceSession | null
-  decoderSession: InferenceSession | null
+  session: JaxSession | null
+  decoderSession: JaxSession | null
   clips: MotionClip[] | null
   selectedClip: number
   isPlaying: boolean
@@ -221,7 +220,7 @@ export function useSimulation({
 
             const physicsFrame = Math.floor((data.time as number) * config.timing.mocapHz)
             const obs = buildObservation(mujoco, model, data, clip, physicsFrame, prevActionRef.current, config)
-            const result = await runInference(session, obs)
+            const result = runInference(session, obs)
             latent = result.latent
             applyActionAndStep(result.logits)
           }
@@ -288,7 +287,7 @@ export function useSimulation({
             stepsThisFrame++
             stepOUProcess(ouStateRef.current.x, config.timing.ctrlDt, ouTheta, ouMu, ouSigma * noiseMagnitude)
             const proprioObs = buildProprioceptiveObservation(mujoco, model, data, prevActionRef.current, config)
-            const logits = await runDecoderInference(decoderSession, ouStateRef.current.x, proprioObs)
+            const logits = runDecoderInference(decoderSession, ouStateRef.current.x, proprioObs)
             applyActionAndStep(logits)
           }
 
@@ -308,7 +307,7 @@ export function useSimulation({
             }
 
             const proprioObs = buildProprioceptiveObservation(mujoco, model, data, prevActionRef.current, config)
-            const logits = await runDecoderInference(decoderSession, latentNoise, proprioObs)
+            const logits = runDecoderInference(decoderSession, latentNoise, proprioObs)
             applyActionAndStep(logits)
           }
 
