@@ -33,7 +33,7 @@ export default function ContactPlot({
     ctx.scale(dpr, dpr)
 
     // Clear
-    ctx.fillStyle = '#1a1a1a'
+    ctx.fillStyle = '#141414'
     ctx.fillRect(0, 0, width, height)
 
     const numSensors = labels.length
@@ -55,7 +55,7 @@ export default function ContactPlot({
       const y = marginTop + i * rowHeight
 
       // Row background
-      ctx.fillStyle = '#222'
+      ctx.fillStyle = '#1c1c1c'
       ctx.fillRect(marginLeft, y + rowPadding, chartWidth, rowHeight - rowPadding * 2)
 
       // Label
@@ -82,7 +82,7 @@ export default function ContactPlot({
     }
 
     // Draw grid lines between rows
-    ctx.strokeStyle = '#333'
+    ctx.strokeStyle = '#2c2c2c'
     ctx.lineWidth = 0.5
     for (let i = 1; i < numSensors; i++) {
       const y = marginTop + i * rowHeight

@@ -13,13 +13,13 @@ export type LatentWalkInitialPose = 'default' | 'rearing'
 
 // Clip indices for initial poses in latent walk mode
 const LATENT_WALK_INITIAL_POSE_CLIPS: Record<LatentWalkInitialPose, number> = {
-  default: 2,  // Walk_4
-  rearing: 3,  // FastWalk_76
+  default: 5,  // Walk_4
+  rearing: 9,  // Rear_149
 }
 
 function App() {
   const [animalId, setAnimalId] = useState(defaultAnimalId)
-  const [selectedClip, setSelectedClip] = useState(3) // clip_0280
+  const [selectedClip, setSelectedClip] = useState(0) // FastWalk_76
   const [isPlaying, setIsPlaying] = useState(false)
   const [speed, setSpeed] = useState(1.0)
   const [inferenceMode, setInferenceMode] = useState<InferenceMode>('tracking')
@@ -93,7 +93,7 @@ function App() {
   // Handle inference mode change (reset selections to defaults)
   const handleModeChange = (mode: InferenceMode) => {
     setInferenceMode(mode)
-    setSelectedClip(3) // FastWalk_76
+    setSelectedClip(0) // FastWalk_76
     setLatentWalkInitialPose('default')
     setNoiseMagnitude(1.0)
   }
@@ -177,10 +177,56 @@ function App() {
           Speed: {speed.toFixed(1)}x
         </div>
 
+        <div className="viewer-help">
+          <div className="viewer-help-title">
+            Camera <span className="viewer-help-title-note"></span>
+          </div>
+          <div className="viewer-help-items">
+            <div className="viewer-help-item">
+              <svg className="input-icon mouse left" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="6.5" y="2.5" width="11" height="19" rx="5.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                <line x1="12" y1="2.5" x2="12" y2="9" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M6.5 2.5h5.5v6.5H6.5z" fill="currentColor" opacity="0.6" />
+              </svg>
+              <span>Rotate</span>
+            </div>
+            <div className="viewer-help-item">
+              <svg className="input-icon mouse right" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="6.5" y="2.5" width="11" height="19" rx="5.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                <line x1="12" y1="2.5" x2="12" y2="9" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M12 2.5h5.5v6.5H12z" fill="currentColor" opacity="0.6" />
+              </svg>
+              <span>Pan</span>
+            </div>
+            <div className="viewer-help-item">
+              <svg className="input-icon mouse wheel" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="6.5" y="2.5" width="11" height="19" rx="5.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                <line x1="12" y1="2.5" x2="12" y2="9" stroke="currentColor" strokeWidth="1.5" />
+                <rect x="10.5" y="6.5" width="3" height="5" rx="1.2" fill="currentColor" opacity="0.7" />
+              </svg>
+              <span>Zoom</span>
+            </div>
+            <div className="viewer-help-item">
+              <span className="keycap">Shift</span>
+              <svg className="input-icon mouse left" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="6.5" y="2.5" width="11" height="19" rx="5.5" stroke="currentColor" strokeWidth="1.5" fill="none" />
+                <line x1="12" y1="2.5" x2="12" y2="9" stroke="currentColor" strokeWidth="1.5" />
+                <path d="M6.5 2.5h5.5v6.5H6.5z" fill="currentColor" opacity="0.6" />
+              </svg>
+              <span>Pan</span>
+            </div>
+          </div>
+        </div>
+
         <div className="project-link">
           <div>
             Part of the{' '}
             <a href="https://mimic-mjx.talmolab.org/" target="_blank" rel="noopener noreferrer">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', marginRight: '3px' }}>
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg>
               MIMIC-MJX
             </a>{' '}
             project
@@ -188,6 +234,10 @@ function App() {
           <div style={{ textAlign: 'center' }}>
             Created by{' '}
             <a href="https://charles-zhng.github.io/" target="_blank" rel="noopener noreferrer">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ verticalAlign: 'middle', marginRight: '3px' }}>
+                <circle cx="12" cy="8" r="4" />
+                <path d="M20 21a8 8 0 1 0-16 0" />
+              </svg>
               Charles Zhang
             </a>
           </div>

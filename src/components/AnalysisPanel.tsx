@@ -81,12 +81,17 @@ export default function AnalysisPanel({
     <>
       {/* Toggle button - always visible */}
       <button className="analysis-toggle" onClick={onToggle}>
-        {isVisible ? '>' : '<'} Analysis
+        {isVisible ? '▲' : '▼'} Motion Analysis
       </button>
 
       {/* Panel */}
       <div className={`analysis-panel ${isVisible ? '' : 'collapsed'}`}>
-        <h3>Motion Analysis</h3>
+        <div className="analysis-header">
+          <h3>Motion Analysis</h3>
+          <button className="analysis-close" onClick={onToggle} title="Close">
+            ×
+          </button>
+        </div>
 
         {/* Joint selector */}
         <div className="analysis-section">
@@ -107,7 +112,7 @@ export default function AnalysisPanel({
           <div className="chart-container">
             <LineChart
               lines={jointAngleData}
-              width={268}
+              width={228}
               height={100}
               yLabel="rad"
               showLegend={true}
@@ -123,7 +128,7 @@ export default function AnalysisPanel({
               data={contactData}
               labels={contactLabels}
               colors={contactColors}
-              width={268}
+              width={228}
               height={72}
             />
           </div>
@@ -136,7 +141,7 @@ export default function AnalysisPanel({
             <div className="chart-container">
               <ScatterPlot
                 points={latentPoints}
-                width={268}
+                width={228}
                 height={150}
                 xLabel={`dim ${latentXDim}`}
                 yLabel={`dim ${latentYDim}`}

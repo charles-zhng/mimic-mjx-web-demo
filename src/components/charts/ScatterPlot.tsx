@@ -73,7 +73,7 @@ export default function ScatterPlot({
     ctx.scale(dpr, dpr)
 
     // Clear
-    ctx.fillStyle = '#1a1a1a'
+    ctx.fillStyle = '#141414'
     ctx.fillRect(0, 0, width, height)
 
     // Margins
@@ -85,7 +85,7 @@ export default function ScatterPlot({
     const chartHeight = height - marginTop - marginBottom
 
     // Draw grid
-    ctx.strokeStyle = '#333'
+    ctx.strokeStyle = '#2c2c2c'
     ctx.lineWidth = 0.5
 
     // Vertical grid lines
@@ -158,7 +158,7 @@ export default function ScatterPlot({
 
         ctx.beginPath()
         ctx.arc(x, y, 2, 0, Math.PI * 2)
-        ctx.fillStyle = `rgba(74, 158, 255, ${alpha})`
+        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`
         ctx.fill()
       }
 
@@ -171,9 +171,9 @@ export default function ScatterPlot({
 
       ctx.beginPath()
       ctx.arc(x, y, 4, 0, Math.PI * 2)
-      ctx.fillStyle = '#4a9eff'
+      ctx.fillStyle = '#fff'
       ctx.fill()
-      ctx.strokeStyle = '#fff'
+      ctx.strokeStyle = '#707070'
       ctx.lineWidth = 1
       ctx.stroke()
     }

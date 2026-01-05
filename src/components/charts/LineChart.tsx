@@ -54,7 +54,7 @@ export default function LineChart({
     ctx.scale(dpr, dpr)
 
     // Clear
-    ctx.fillStyle = '#1a1a1a'
+    ctx.fillStyle = '#141414'
     ctx.fillRect(0, 0, width, height)
 
     // Margins
@@ -66,7 +66,7 @@ export default function LineChart({
     const chartHeight = height - marginTop - marginBottom
 
     // Draw grid lines
-    ctx.strokeStyle = '#333'
+    ctx.strokeStyle = '#2c2c2c'
     ctx.lineWidth = 0.5
     const numGridLines = 4
     for (let i = 0; i <= numGridLines; i++) {
