@@ -102,8 +102,8 @@ function relativeQuatInto(out: number[], q1: number[], q2: number[]): void {
  *    - quat_targets: referenceLength × 4 (all frames together)
  *    - joint_targets: referenceLength × numJoints (all frames together)
  *    - body_targets: numBodies × referenceLength × 3 (bodies outer, frames inner)
- * 2. Proprioceptive observation: Current robot state + sensors
- *    - Order: joints, vels, forces, height, zaxis, appendages, kinematic, touch, prev_action
+ * 2. Proprioceptive observation: Current robot state
+ *    - Order: joints, vels, forces, height, zaxis, appendages, prev_action
  *
  * @param config Animal configuration with all dimensions and indices
  */
@@ -268,27 +268,6 @@ export function buildObservation(
     obs[propIdx++] = _rel[0] * _torsoMat[2] + _rel[1] * _torsoMat[5] + _rel[2] * _torsoMat[8]
   }
 
-  // Kinematic sensors: accelerometer + velocimeter + gyro
-  const sensordata = (data as unknown as Record<string, Float64Array>).sensordata
-
-  // Accelerometer
-  for (let i = config.sensors.kinematic.accelerometer[0]; i < config.sensors.kinematic.accelerometer[1]; i++) {
-    obs[propIdx++] = sensordata[i] || 0
-  }
-  // Velocimeter
-  for (let i = config.sensors.kinematic.velocimeter[0]; i < config.sensors.kinematic.velocimeter[1]; i++) {
-    obs[propIdx++] = sensordata[i] || 0
-  }
-  // Gyro
-  for (let i = config.sensors.kinematic.gyro[0]; i < config.sensors.kinematic.gyro[1]; i++) {
-    obs[propIdx++] = sensordata[i] || 0
-  }
-
-  // Touch sensors
-  for (const touch of config.sensors.touch) {
-    obs[propIdx++] = sensordata[touch.index] || 0
-  }
-
   // Previous action: actionSize values (LAST in training order)
   for (let i = 0; i < config.action.size; i++) {
     obs[propIdx++] = prevAction[i]
@@ -311,7 +290,7 @@ export function buildObservation(
  * Build proprioceptive-only observation for latent walk mode.
  * This extracts only the current robot state (no reference trajectory targets).
  *
- * Order: joints, velocities, forces, height, zaxis, appendages, kinematic sensors, touch, prev_action
+ * Order: joints, velocities, forces, height, zaxis, appendages, prev_action
  *
  * @param config Animal configuration with all dimensions and indices
  */
@@ -386,27 +365,6 @@ export function buildProprioceptiveObservation(
     obs[propIdx++] = _rel[0] * _torsoMat[0] + _rel[1] * _torsoMat[3] + _rel[2] * _torsoMat[6]
     obs[propIdx++] = _rel[0] * _torsoMat[1] + _rel[1] * _torsoMat[4] + _rel[2] * _torsoMat[7]
     obs[propIdx++] = _rel[0] * _torsoMat[2] + _rel[1] * _torsoMat[5] + _rel[2] * _torsoMat[8]
-  }
-
-  // Kinematic sensors: accelerometer + velocimeter + gyro
-  const sensordata = (data as unknown as Record<string, Float64Array>).sensordata
-
-  // Accelerometer
-  for (let i = config.sensors.kinematic.accelerometer[0]; i < config.sensors.kinematic.accelerometer[1]; i++) {
-    obs[propIdx++] = sensordata[i] || 0
-  }
-  // Velocimeter
-  for (let i = config.sensors.kinematic.velocimeter[0]; i < config.sensors.kinematic.velocimeter[1]; i++) {
-    obs[propIdx++] = sensordata[i] || 0
-  }
-  // Gyro
-  for (let i = config.sensors.kinematic.gyro[0]; i < config.sensors.kinematic.gyro[1]; i++) {
-    obs[propIdx++] = sensordata[i] || 0
-  }
-
-  // Touch sensors
-  for (const touch of config.sensors.touch) {
-    obs[propIdx++] = sensordata[touch.index] || 0
   }
 
   // Previous action: actionSize values
