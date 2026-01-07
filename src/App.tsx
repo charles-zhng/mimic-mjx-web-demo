@@ -11,10 +11,10 @@ import type { VisualizationData, VisualizationHistory } from './types/visualizat
 
 export type LatentWalkInitialPose = 'default' | 'rearing'
 
-// Clip indices for initial poses in latent walk mode
-const LATENT_WALK_INITIAL_POSE_CLIPS: Record<LatentWalkInitialPose, number> = {
-  default: 5,  // Walk_4
-  rearing: 9,  // Rear_149
+// Clip and frame indices for initial poses in latent walk mode
+const LATENT_WALK_INITIAL_POSES: Record<LatentWalkInitialPose, { clip: number; frame: number }> = {
+  default: { clip: 5, frame: 0 },    // Walk_4, first frame
+  rearing: { clip: 9, frame: 100 },  // Rear_149, peak rearing frame
 }
 
 function App() {
@@ -44,10 +44,10 @@ function App() {
   const isReady = mujocoReady && onnxReady && clipsReady
   const error = mujocoError || onnxError || clipsError
 
-  // Determine which clip to use for initial pose
-  const initialPoseClipIndex = (inferenceMode === 'latentWalk' || inferenceMode === 'latentNoise')
-    ? LATENT_WALK_INITIAL_POSE_CLIPS[latentWalkInitialPose]
-    : selectedClip
+  // Determine which clip and frame to use for initial pose
+  const initialPose = (inferenceMode === 'latentWalk' || inferenceMode === 'latentNoise')
+    ? LATENT_WALK_INITIAL_POSES[latentWalkInitialPose]
+    : { clip: selectedClip, frame: 0 }
 
   // Visualization data callback
   const handleVisualizationData = useCallback((vizData: VisualizationData) => {
@@ -70,7 +70,8 @@ function App() {
     session,
     decoderSession,
     clips,
-    selectedClip: initialPoseClipIndex,
+    selectedClip: initialPose.clip,
+    initialFrame: initialPose.frame,
     isPlaying,
     speed,
     isReady,

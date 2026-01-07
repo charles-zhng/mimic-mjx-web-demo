@@ -52,7 +52,7 @@ body,
   padding: 16px;
   width: var(--panel-width);
   max-width: 90vw;
-  z-index: 100;
+  z-index: 150;
 }
 
 .controls-panel h2 {

@@ -17,6 +17,7 @@ interface UseSimulationProps {
   decoderSession: InferenceSession | null
   clips: MotionClip[] | null
   selectedClip: number
+  initialFrame: number
   isPlaying: boolean
   speed: number
   isReady: boolean
@@ -72,6 +73,7 @@ export function useSimulation({
   decoderSession,
   clips,
   selectedClip,
+  initialFrame,
   isPlaying,
   speed,
   isReady,
@@ -106,9 +108,10 @@ export function useSimulation({
     // Reset MuJoCo data
     mujoco.mj_resetData(model, data)
 
-    // Get qpos array
+    // Get qpos array - use initialFrame (clamped to valid range)
     const qpos = data.qpos as unknown as Float64Array
-    const refQpos = clip.qpos[0]
+    const frameIndex = Math.min(initialFrame, clip.qpos.length - 1)
+    const refQpos = clip.qpos[frameIndex]
 
     // Copy reference qpos to MuJoCo (only up to model.nq)
     for (let i = 0; i < Math.min(refQpos.length, model.nq); i++) {
@@ -148,7 +151,7 @@ export function useSimulation({
     // Reset OU state for latent walk mode
     ouStateRef.current.x.fill(0)
     ouStateRef.current.initialized = false
-  }, [mujoco, model, data, ghostData, clips, selectedClip, config.action.size])
+  }, [mujoco, model, data, ghostData, clips, selectedClip, initialFrame, config.action.size])
 
   // Reset when clip or inference mode changes
   useEffect(() => {
