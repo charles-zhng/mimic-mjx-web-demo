@@ -31,6 +31,44 @@ from onnx import TensorProto, helper, numpy_helper
 from track_mjx.agent import checkpointing
 
 
+def get_obs_sizes(cfg):
+    """Extract observation sizes from config (handles both old and new config formats)."""
+    nc = cfg.network_config
+    if hasattr(nc, 'obs_sizes'):
+        # New config format
+        reference_obs_size = nc.obs_sizes.imitation_target
+        proprio_obs_size = nc.obs_sizes.proprioception
+        obs_size = reference_obs_size + proprio_obs_size
+    else:
+        # Old config format
+        reference_obs_size = nc.reference_obs_size
+        proprio_obs_size = nc.proprioceptive_obs_size
+        obs_size = nc.observation_size
+    return obs_size, reference_obs_size, proprio_obs_size
+
+
+def get_normalizer_arrays(normalizer_params, reference_obs_size):
+    """Extract mean and std arrays from normalizer (handles both old and new formats).
+
+    Returns:
+        norm_mean: Full observation mean (float32 numpy array)
+        norm_std: Full observation std (float32 numpy array)
+    """
+    if hasattr(normalizer_params, 'mean'):
+        # Old format: single RunningStatisticsState
+        norm_mean = np.array(normalizer_params.mean).astype(np.float32)
+        norm_std = np.array(normalizer_params.std).astype(np.float32)
+    else:
+        # New format: DictRunningStatisticsState with imitation_target and proprioception
+        ref_mean = np.array(normalizer_params.imitation_target.mean).astype(np.float32)
+        ref_std = np.array(normalizer_params.imitation_target.std).astype(np.float32)
+        proprio_mean = np.array(normalizer_params.proprioception.mean).astype(np.float32)
+        proprio_std = np.array(normalizer_params.proprioception.std).astype(np.float32)
+        norm_mean = np.concatenate([ref_mean, proprio_mean])
+        norm_std = np.concatenate([ref_std, proprio_std])
+    return norm_mean, norm_std
+
+
 def build_decoder_only_onnx_model(normalizer_params, decoder_params, cfg):
     """Build decoder-only ONNX model for latent space random walk mode.
 
@@ -45,13 +83,11 @@ def build_decoder_only_onnx_model(normalizer_params, decoder_params, cfg):
     Returns:
         ONNX ModelProto
     """
-    reference_obs_size = cfg.network_config.reference_obs_size
-    proprio_obs_size = cfg.network_config.proprioceptive_obs_size
+    _, reference_obs_size, proprio_obs_size = get_obs_sizes(cfg)
     latent_size = cfg.network_config.intention_size
 
     # Convert params to numpy - only need proprio portion of normalization
-    norm_mean_full = np.array(normalizer_params.mean).astype(np.float32)
-    norm_std_full = np.array(normalizer_params.std).astype(np.float32)
+    norm_mean_full, norm_std_full = get_normalizer_arrays(normalizer_params, reference_obs_size)
     proprio_norm_mean = norm_mean_full[reference_obs_size:]
     proprio_norm_std = norm_std_full[reference_obs_size:] + 1e-8
     decoder_params_np = jax.tree.map(lambda x: np.array(x).astype(np.float32), decoder_params)
@@ -169,12 +205,10 @@ def build_onnx_model(normalizer_params, encoder_params, decoder_params, cfg):
     Returns:
         ONNX ModelProto
     """
-    reference_obs_size = cfg.network_config.reference_obs_size
-    obs_size = cfg.network_config.observation_size
+    obs_size, reference_obs_size, _ = get_obs_sizes(cfg)
 
     # Convert params to numpy
-    norm_mean = np.array(normalizer_params.mean).astype(np.float32)
-    norm_std = np.array(normalizer_params.std).astype(np.float32)
+    norm_mean, norm_std = get_normalizer_arrays(normalizer_params, reference_obs_size)
     encoder_params_np = jax.tree.map(lambda x: np.array(x).astype(np.float32), encoder_params)
     decoder_params_np = jax.tree.map(lambda x: np.array(x).astype(np.float32), decoder_params)
 
@@ -377,8 +411,10 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     # Unpack policy params: (normalizer_state, network_params)
     normalizer_params, network_params = policy_params
 
-    print(f"Observation size: {cfg.network_config.observation_size}")
-    print(f"Reference obs size: {cfg.network_config.reference_obs_size}")
+    obs_size, reference_obs_size, proprio_obs_size = get_obs_sizes(cfg)
+    print(f"Observation size: {obs_size}")
+    print(f"Reference obs size: {reference_obs_size}")
+    print(f"Proprioceptive obs size: {proprio_obs_size}")
     print(f"Action size: {cfg.network_config.action_size}")
     print(f"Intention size: {cfg.network_config.intention_size}")
 
@@ -418,8 +454,7 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     input_name = session.get_inputs()[0].name
     output_name = session.get_outputs()[0].name
 
-    # Test input
-    obs_size = cfg.network_config.observation_size
+    # Test input (flat for ONNX)
     test_input = np.zeros((1, obs_size), dtype=np.float32)
 
     ort_output = session.run([output_name], {input_name: test_input})[0]
@@ -429,10 +464,24 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     print("Comparing with original Flax module...")
     ppo_network = checkpointing.make_ppo_network_from_cfg(cfg)
     dummy_key = jax.random.PRNGKey(0)
-    flax_output, _, _ = ppo_network.policy_network.apply(
-        normalizer_params, network_params, jnp.array(test_input), dummy_key,
-        deterministic=True, get_activation=False
-    )
+
+    # Check if model uses dict observation format (new) or flat format (old)
+    if hasattr(normalizer_params, 'imitation_target'):
+        # New format: dict observation
+        test_input_dict = {
+            'imitation_target': jnp.zeros((1, reference_obs_size)),
+            'proprioception': jnp.zeros((1, proprio_obs_size)),
+        }
+        flax_output, _, _ = ppo_network.policy_network.apply(
+            normalizer_params, network_params, test_input_dict, dummy_key,
+            deterministic=True, get_activation=False
+        )
+    else:
+        # Old format: flat observation
+        flax_output, _, _ = ppo_network.policy_network.apply(
+            normalizer_params, network_params, jnp.array(test_input), dummy_key,
+            deterministic=True, get_activation=False
+        )
 
     max_diff = np.max(np.abs(np.array(flax_output) - ort_output))
     print(f"Max difference between Flax and ONNX: {max_diff}")
@@ -446,10 +495,9 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     print("\nVerifying decoder-only ONNX model...")
     decoder_session = ort.InferenceSession(decoder_output_path)
     latent_size = cfg.network_config.intention_size
-    proprio_size = cfg.network_config.proprioceptive_obs_size
 
     test_latent = np.zeros((1, latent_size), dtype=np.float32)
-    test_proprio = np.zeros((1, proprio_size), dtype=np.float32)
+    test_proprio = np.zeros((1, proprio_obs_size), dtype=np.float32)
 
     decoder_output = decoder_session.run(
         [decoder_session.get_outputs()[0].name],
@@ -460,12 +508,13 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
 
     # Save normalization parameters
     norm_params_path = Path(output_path).with_suffix(".norm.npz")
+    norm_mean, norm_std = get_normalizer_arrays(normalizer_params, reference_obs_size)
     np.savez(
         norm_params_path,
-        mean=np.array(normalizer_params.mean),
-        std=np.array(normalizer_params.std),
-        reference_obs_size=cfg.network_config.reference_obs_size,
-        proprioceptive_obs_size=cfg.network_config.proprioceptive_obs_size,
+        mean=norm_mean,
+        std=norm_std,
+        reference_obs_size=reference_obs_size,
+        proprioceptive_obs_size=proprio_obs_size,
     )
     print(f"Saved normalization parameters to: {norm_params_path}")
 

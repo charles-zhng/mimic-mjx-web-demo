@@ -268,6 +268,24 @@ export function buildObservation(
     obs[propIdx++] = _rel[0] * _torsoMat[2] + _rel[1] * _torsoMat[5] + _rel[2] * _torsoMat[8]
   }
 
+  // Kinematic sensors (accelerometer, velocimeter, gyro): 9 values
+  const sensordata = (data as unknown as Record<string, Float64Array>).sensordata
+  const kinematic = config.sensors.kinematic
+  for (let i = kinematic.accelerometer[0]; i < kinematic.accelerometer[1]; i++) {
+    obs[propIdx++] = sensordata[i]
+  }
+  for (let i = kinematic.velocimeter[0]; i < kinematic.velocimeter[1]; i++) {
+    obs[propIdx++] = sensordata[i]
+  }
+  for (let i = kinematic.gyro[0]; i < kinematic.gyro[1]; i++) {
+    obs[propIdx++] = sensordata[i]
+  }
+
+  // Touch sensors: 4 values
+  for (const touchSensor of config.sensors.touch) {
+    obs[propIdx++] = sensordata[touchSensor.index]
+  }
+
   // Previous action: actionSize values (LAST in training order)
   for (let i = 0; i < config.action.size; i++) {
     obs[propIdx++] = prevAction[i]
@@ -365,6 +383,24 @@ export function buildProprioceptiveObservation(
     obs[propIdx++] = _rel[0] * _torsoMat[0] + _rel[1] * _torsoMat[3] + _rel[2] * _torsoMat[6]
     obs[propIdx++] = _rel[0] * _torsoMat[1] + _rel[1] * _torsoMat[4] + _rel[2] * _torsoMat[7]
     obs[propIdx++] = _rel[0] * _torsoMat[2] + _rel[1] * _torsoMat[5] + _rel[2] * _torsoMat[8]
+  }
+
+  // Kinematic sensors (accelerometer, velocimeter, gyro): 9 values
+  const sensordata = (data as unknown as Record<string, Float64Array>).sensordata
+  const kinematic = config.sensors.kinematic
+  for (let i = kinematic.accelerometer[0]; i < kinematic.accelerometer[1]; i++) {
+    obs[propIdx++] = sensordata[i]
+  }
+  for (let i = kinematic.velocimeter[0]; i < kinematic.velocimeter[1]; i++) {
+    obs[propIdx++] = sensordata[i]
+  }
+  for (let i = kinematic.gyro[0]; i < kinematic.gyro[1]; i++) {
+    obs[propIdx++] = sensordata[i]
+  }
+
+  // Touch sensors: 4 values
+  for (const touchSensor of config.sensors.touch) {
+    obs[propIdx++] = sensordata[touchSensor.index]
   }
 
   // Previous action: actionSize values

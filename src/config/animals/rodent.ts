@@ -21,16 +21,16 @@ export const rodentConfig: AnimalConfig = {
   assets: {
     modelPath: '/models/rodent_scaled.xml',
     skinPath: '/models/rodent_walker_skin.skn',
-    onnxPath: '/nn/intention_network.onnx?v=5',
-    decoderOnnxPath: '/nn/decoder_only.onnx?v=5',
+    onnxPath: '/nn/intention_network.onnx?v=6',
+    decoderOnnxPath: '/nn/decoder_only.onnx?v=6',
     clipsPath: '/motions/clips.json',
   },
 
   obs: {
-    // Total: 904 = 640 (reference) + 264 (proprioceptive)
-    totalSize: 904,
+    // Total: 917 = 640 (reference) + 277 (proprioceptive)
+    totalSize: 917,
     referenceObsSize: 640,
-    proprioceptiveObsSize: 264,
+    proprioceptiveObsSize: 277,
     referenceLength: 5, // 5 future frames
   },
 
