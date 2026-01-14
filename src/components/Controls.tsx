@@ -100,12 +100,12 @@ export default function Controls({
         <label>Speed: {speed.toFixed(1)}x</label>
         <input
           type="range"
-          min="0.1"
+          min="0"
           max="2.0"
           step="0.1"
           value={speed}
-          onChange={(e) => onSpeedChange(Number(e.target.value))}
-          style={{ '--fill-percent': `${((speed - 0.1) / 1.9) * 100}%` } as React.CSSProperties}
+          onChange={(e) => onSpeedChange(Math.max(0.1, Number(e.target.value)))}
+          style={{ '--fill-percent': `${(speed / 2.0) * 100}%` } as React.CSSProperties}
         />
         <div className="speed-display">0.1x — 2.0x</div>
       </div>

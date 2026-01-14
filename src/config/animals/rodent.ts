@@ -21,7 +21,7 @@ export const rodentConfig: AnimalConfig = {
   assets: {
     modelPath: '/models/rodent_scaled.xml',
     skinPath: '/models/rodent_walker_skin.skn',
-    onnxPath: '/nn/intention_network.onnx?v=6',
+    onnxPath: '/nn/intention_network.onnx?v=7',
     decoderOnnxPath: '/nn/decoder_only.onnx?v=6',
     clipsPath: '/motions/clips.json',
   },
@@ -86,6 +86,6 @@ export const rodentConfig: AnimalConfig = {
     size: 16,
     ouTheta: 0.15,   // Mean reversion rate
     ouMu: 0.0,       // Long-term mean
-    ouSigma: 0.3,    // Volatility
+    ouSigma: 1.0,    // Volatility
   },
 }
