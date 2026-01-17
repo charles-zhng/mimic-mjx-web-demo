@@ -36,6 +36,7 @@ interface AnalysisPanelProps {
   onJointChange: (index: number) => void
   isVisible: boolean
   onToggle: () => void
+  latentSize?: number
 }
 
 export default function AnalysisPanel({
@@ -44,6 +45,7 @@ export default function AnalysisPanel({
   onJointChange,
   isVisible,
   onToggle,
+  latentSize = 4,
 }: AnalysisPanelProps) {
   const [latentXDim, setLatentXDim] = useState(0)
   const [latentYDim, setLatentYDim] = useState(1)
@@ -149,7 +151,7 @@ export default function AnalysisPanel({
                 yDim={latentYDim}
                 onXDimChange={setLatentXDim}
                 onYDimChange={setLatentYDim}
-                numDims={16}
+                numDims={latentSize}
               />
             </div>
           </div>

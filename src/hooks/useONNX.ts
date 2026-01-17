@@ -108,7 +108,7 @@ export function extractActionInto(out: Float32Array, logits: Float32Array): void
 
 /**
  * Run inference on the decoder-only network (for latent walk mode).
- * Input: latent vector (e.g., 16-dim) + proprioceptive observation (e.g., 277-dim)
+ * Input: latent vector + proprioceptive observation
  * Output: logits (action means + action log_stds)
  */
 export async function runDecoderInference(

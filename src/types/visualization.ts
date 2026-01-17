@@ -9,7 +9,7 @@ export interface VisualizationData {
   jointVelocity: { current: number; reference: number }
   // Touch sensors (4 feet)
   touchSensors: number[]
-  // Latent space (16-dim)
+  // Latent space vector
   latent: Float32Array
 }
 

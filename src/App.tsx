@@ -168,6 +168,7 @@ function App() {
             onJointChange={setSelectedJointIndex}
             isVisible={showAnalysis}
             onToggle={() => setShowAnalysis(!showAnalysis)}
+            latentSize={config.latentSpace?.size}
           />
         )}
 
