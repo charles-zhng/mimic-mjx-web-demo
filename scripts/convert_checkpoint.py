@@ -15,7 +15,6 @@ Usage:
 """
 
 import argparse
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +30,88 @@ import onnx
 from onnx import TensorProto, helper, numpy_helper
 
 from track_mjx.agent import checkpointing
+
+
+class CheckpointValidationError(Exception):
+    """Raised when checkpoint validation fails."""
+    pass
+
+
+def validate_checkpoint(ckpt: dict) -> None:
+    """Validate checkpoint structure before conversion.
+
+    Args:
+        ckpt: Loaded checkpoint dictionary
+
+    Raises:
+        CheckpointValidationError: If required fields are missing or malformed
+    """
+    # Check top-level keys
+    required_keys = ['cfg', 'policy']
+    missing = [k for k in required_keys if k not in ckpt]
+    if missing:
+        raise CheckpointValidationError(
+            f"Missing required checkpoint keys: {missing}. "
+            f"Found keys: {list(ckpt.keys())}"
+        )
+
+    # Validate policy structure: (normalizer_params, network_params)
+    policy = ckpt['policy']
+    if not isinstance(policy, (list, tuple)) or len(policy) != 2:
+        raise CheckpointValidationError(
+            f"Expected policy to be (normalizer_params, network_params) tuple, "
+            f"got {type(policy).__name__}"
+        )
+
+    normalizer_params, network_params = policy
+
+    # Validate normalizer params (DictRunningStatisticsState with imitation_target and proprioception)
+    if not hasattr(normalizer_params, 'imitation_target') or not hasattr(normalizer_params, 'proprioception'):
+        raise CheckpointValidationError(
+            "Invalid normalizer_params: expected DictRunningStatisticsState with 'imitation_target' and 'proprioception'. "
+            f"Found attributes: {[a for a in dir(normalizer_params) if not a.startswith('_')]}"
+        )
+
+    # Validate network params structure
+    if not isinstance(network_params, dict) or 'params' not in network_params:
+        raise CheckpointValidationError(
+            f"Expected network_params to be dict with 'params' key, "
+            f"got {type(network_params).__name__} with keys: {list(network_params.keys()) if isinstance(network_params, dict) else 'N/A'}"
+        )
+
+    params = network_params['params']
+    required_subkeys = ['encoder', 'decoder']
+    missing_subkeys = [k for k in required_subkeys if k not in params]
+    if missing_subkeys:
+        raise CheckpointValidationError(
+            f"Missing required network params: {missing_subkeys}. "
+            f"Found: {list(params.keys())}"
+        )
+
+    # Validate encoder has fc2_mean for latent projection
+    encoder = params['encoder']
+    if 'fc2_mean' not in encoder:
+        raise CheckpointValidationError(
+            f"Encoder missing 'fc2_mean' layer for latent projection. "
+            f"Found layers: {list(encoder.keys())}"
+        )
+
+    # Validate config has network_config
+    cfg = ckpt['cfg']
+    if not hasattr(cfg, 'network_config'):
+        raise CheckpointValidationError(
+            "Config missing 'network_config' attribute"
+        )
+
+    nc = cfg.network_config
+    required_nc_attrs = ['action_size', 'intention_size', 'encoder_layer_sizes', 'decoder_layer_sizes']
+    missing_nc = [a for a in required_nc_attrs if not hasattr(nc, a)]
+    if missing_nc:
+        raise CheckpointValidationError(
+            f"network_config missing required attributes: {missing_nc}"
+        )
+
+    print("Checkpoint validation passed")
 
 
 @dataclass
@@ -81,40 +162,27 @@ class NetworkDims:
 
 
 def get_obs_sizes(cfg):
-    """Extract observation sizes from config (handles both old and new config formats)."""
+    """Extract observation sizes from config."""
     nc = cfg.network_config
-    if hasattr(nc, 'obs_sizes'):
-        # New config format
-        reference_obs_size = nc.obs_sizes.imitation_target
-        proprio_obs_size = nc.obs_sizes.proprioception
-        obs_size = reference_obs_size + proprio_obs_size
-    else:
-        # Old config format
-        reference_obs_size = nc.reference_obs_size
-        proprio_obs_size = nc.proprioceptive_obs_size
-        obs_size = nc.observation_size
+    reference_obs_size = nc.obs_sizes.imitation_target
+    proprio_obs_size = nc.obs_sizes.proprioception
+    obs_size = reference_obs_size + proprio_obs_size
     return obs_size, reference_obs_size, proprio_obs_size
 
 
-def get_normalizer_arrays(normalizer_params, reference_obs_size):
-    """Extract mean and std arrays from normalizer (handles both old and new formats).
+def get_normalizer_arrays(normalizer_params):
+    """Extract mean and std arrays from DictRunningStatisticsState normalizer.
 
     Returns:
         norm_mean: Full observation mean (float32 numpy array)
         norm_std: Full observation std (float32 numpy array)
     """
-    if hasattr(normalizer_params, 'mean'):
-        # Old format: single RunningStatisticsState
-        norm_mean = np.array(normalizer_params.mean).astype(np.float32)
-        norm_std = np.array(normalizer_params.std).astype(np.float32)
-    else:
-        # New format: DictRunningStatisticsState with imitation_target and proprioception
-        ref_mean = np.array(normalizer_params.imitation_target.mean).astype(np.float32)
-        ref_std = np.array(normalizer_params.imitation_target.std).astype(np.float32)
-        proprio_mean = np.array(normalizer_params.proprioception.mean).astype(np.float32)
-        proprio_std = np.array(normalizer_params.proprioception.std).astype(np.float32)
-        norm_mean = np.concatenate([ref_mean, proprio_mean])
-        norm_std = np.concatenate([ref_std, proprio_std])
+    ref_mean = np.array(normalizer_params.imitation_target.mean).astype(np.float32)
+    ref_std = np.array(normalizer_params.imitation_target.std).astype(np.float32)
+    proprio_mean = np.array(normalizer_params.proprioception.mean).astype(np.float32)
+    proprio_std = np.array(normalizer_params.proprioception.std).astype(np.float32)
+    norm_mean = np.concatenate([ref_mean, proprio_mean])
+    norm_std = np.concatenate([ref_std, proprio_std])
     return norm_mean, norm_std
 
 
@@ -207,7 +275,7 @@ def build_decoder_only_onnx_model(normalizer_params, decoder_params, dims: Netwo
         ONNX ModelProto
     """
     # Convert params to numpy - only need proprio portion of normalization
-    norm_mean_full, norm_std_full = get_normalizer_arrays(normalizer_params, dims.reference_obs_size)
+    norm_mean_full, norm_std_full = get_normalizer_arrays(normalizer_params)
     proprio_norm_mean = norm_mean_full[dims.reference_obs_size:]
     proprio_norm_std = norm_std_full[dims.reference_obs_size:] + 1e-8
     decoder_params_np = jax.tree.map(lambda x: np.array(x).astype(np.float32), decoder_params)
@@ -289,7 +357,7 @@ def build_onnx_model(normalizer_params, encoder_params, decoder_params, dims: Ne
         ONNX ModelProto
     """
     # Convert params to numpy
-    norm_mean, norm_std = get_normalizer_arrays(normalizer_params, dims.reference_obs_size)
+    norm_mean, norm_std = get_normalizer_arrays(normalizer_params)
     encoder_params_np = jax.tree.map(lambda x: np.array(x).astype(np.float32), encoder_params)
     decoder_params_np = jax.tree.map(lambda x: np.array(x).astype(np.float32), decoder_params)
 
@@ -406,49 +474,23 @@ def extract_encoder_decoder_params(policy_params):
     return encoder_params, decoder_params
 
 
-def update_typescript_config(dims: NetworkDims, config_path: Path) -> bool:
-    """Update latentSpace.size in rodent.ts after conversion.
-
-    Args:
-        dims: NetworkDims with latent_size
-        config_path: Path to the TypeScript config file
-
-    Returns:
-        True if updated, False if not found or unchanged
-    """
-    if not config_path.exists():
-        return False
-
-    content = config_path.read_text()
-    # Match latentSpace.size value (handles various whitespace)
-    pattern = r'(latentSpace:\s*\{[^}]*size:\s*)(\d+)'
-    match = re.search(pattern, content)
-
-    if not match:
-        return False
-
-    current_size = int(match.group(2))
-    if current_size == dims.latent_size:
-        return False
-
-    new_content = re.sub(pattern, rf'\g<1>{dims.latent_size}', content)
-    config_path.write_text(new_content)
-    return True
-
-
-def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None, update_ts_config: bool = True):
+def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     """Convert checkpoint to ONNX format.
 
     Args:
         checkpoint_path: Path to checkpoint directory
         output_path: Path for output ONNX file
         step: Optional checkpoint step (default: latest)
-        update_ts_config: Whether to auto-update TypeScript config (default: True)
     """
     print(f"Loading checkpoint from: {checkpoint_path}")
 
     # Load checkpoint
     ckpt = checkpointing.load_checkpoint_for_eval(checkpoint_path, step=step)
+
+    # Validate checkpoint structure before processing
+    print("Validating checkpoint structure...")
+    validate_checkpoint(ckpt)
+
     cfg = ckpt["cfg"]
     policy_params = ckpt["policy"]
 
@@ -512,23 +554,14 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None, up
     ppo_network = checkpointing.make_ppo_network_from_cfg(cfg)
     dummy_key = jax.random.PRNGKey(0)
 
-    # Check if model uses dict observation format (new) or flat format (old)
-    if hasattr(normalizer_params, 'imitation_target'):
-        # New format: dict observation
-        test_input_dict = {
-            'imitation_target': jnp.zeros((1, dims.reference_obs_size)),
-            'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
-        }
-        flax_output, _, _ = ppo_network.policy_network.apply(
-            normalizer_params, network_params, test_input_dict, dummy_key,
-            deterministic=True, get_activation=False
-        )
-    else:
-        # Old format: flat observation
-        flax_output, _, _ = ppo_network.policy_network.apply(
-            normalizer_params, network_params, jnp.array(test_input), dummy_key,
-            deterministic=True, get_activation=False
-        )
+    test_input_dict = {
+        'imitation_target': jnp.zeros((1, dims.reference_obs_size)),
+        'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
+    }
+    flax_output, _, _ = ppo_network.policy_network.apply(
+        normalizer_params, network_params, test_input_dict, dummy_key,
+        deterministic=True, get_activation=False
+    )
 
     max_diff = np.max(np.abs(np.array(flax_output) - ort_output))
     print(f"Max difference between Flax and ONNX: {max_diff}")
@@ -554,7 +587,7 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None, up
 
     # Save normalization parameters
     norm_params_path = Path(output_path).with_suffix(".norm.npz")
-    norm_mean, norm_std = get_normalizer_arrays(normalizer_params, dims.reference_obs_size)
+    norm_mean, norm_std = get_normalizer_arrays(normalizer_params)
     np.savez(
         norm_params_path,
         mean=norm_mean,
@@ -580,16 +613,6 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None, up
         json.dump(metadata, f, indent=2)
     print(f"Saved network metadata to: {metadata_path}")
 
-    # Auto-update TypeScript config if requested
-    if update_ts_config:
-        # Use script location to find project root
-        project_root = Path(__file__).parent.parent
-        ts_config_path = project_root / "src" / "config" / "animals" / "rodent.ts"
-        if update_typescript_config(dims, ts_config_path):
-            print(f"Updated latentSpace.size to {dims.latent_size} in {ts_config_path}")
-        else:
-            print(f"TypeScript config unchanged (latentSpace.size already {dims.latent_size})")
-
     print("Done!")
 
 
@@ -613,11 +636,6 @@ def main():
         default=None,
         help="Checkpoint step to load (default: latest)",
     )
-    parser.add_argument(
-        "--no-update-ts",
-        action="store_true",
-        help="Skip auto-updating TypeScript config (rodent.ts)",
-    )
 
     args = parser.parse_args()
 
@@ -625,7 +643,7 @@ def main():
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert_to_onnx(args.checkpoint, str(output_path), args.step, update_ts_config=not args.no_update_ts)
+    convert_to_onnx(args.checkpoint, str(output_path), args.step)
 
 
 if __name__ == "__main__":

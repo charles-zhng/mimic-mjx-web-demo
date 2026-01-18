@@ -39,17 +39,24 @@ $PYTHON "$SCRIPT_DIR/convert_checkpoint.py" \
     --output "$PROJECT_DIR/public/nn/intention_network.onnx"
 
 echo ""
-echo "Step 2: Updating cache version..."
-# Increment version query param in config to bust browser cache
+echo "Step 2: Updating cache versions..."
+# Increment version query params in config to bust browser cache
 CONFIG_FILE="$PROJECT_DIR/src/config/animals/rodent.ts"
+
+# Update intention_network.onnx version
 if grep -q "intention_network.onnx?v=" "$CONFIG_FILE"; then
-    # Extract current version and increment
     CURRENT_V=$(grep -o "intention_network.onnx?v=[0-9]*" "$CONFIG_FILE" | grep -o "[0-9]*$")
     NEW_V=$((CURRENT_V + 1))
     sed -i '' "s/intention_network.onnx?v=$CURRENT_V/intention_network.onnx?v=$NEW_V/" "$CONFIG_FILE"
-    echo "Updated version: v=$CURRENT_V -> v=$NEW_V"
-else
-    echo "Warning: Could not find version string in config"
+    echo "Updated intention_network.onnx: v=$CURRENT_V -> v=$NEW_V"
+fi
+
+# Update decoder_only.onnx version
+if grep -q "decoder_only.onnx?v=" "$CONFIG_FILE"; then
+    CURRENT_V=$(grep -o "decoder_only.onnx?v=[0-9]*" "$CONFIG_FILE" | grep -o "[0-9]*$")
+    NEW_V=$((CURRENT_V + 1))
+    sed -i '' "s/decoder_only.onnx?v=$CURRENT_V/decoder_only.onnx?v=$NEW_V/" "$CONFIG_FILE"
+    echo "Updated decoder_only.onnx: v=$CURRENT_V -> v=$NEW_V"
 fi
 
 echo ""
@@ -57,5 +64,6 @@ echo "=== Done! ==="
 echo "Updated files:"
 echo "  - public/nn/intention_network.onnx"
 echo "  - public/nn/decoder_only.onnx"
+echo "  - public/nn/network_metadata.json"
 echo ""
 echo "Run 'npm run dev' to test the new checkpoint."
