@@ -103,15 +103,18 @@ export interface AnimalConfig {
   }
 
   // Latent space configuration for random walk mode (optional)
+  // Uses double-OU: velocity follows OU, position integrates velocity with mean-reversion
   latentSpace?: {
     /** Latent vector dimension (e.g., 16) */
     size: number
-    /** OU process mean reversion rate - higher = faster return to mean */
-    ouTheta: number
-    /** OU process long-term mean (typically 0) */
+    /** Velocity mean-reversion rate - higher = faster velocity decay */
+    ouThetaV: number
+    /** Velocity volatility - higher = more acceleration */
+    ouSigmaV: number
+    /** Position mean-reversion rate - gentle pull toward mean */
+    ouThetaX: number
+    /** Position target (typically 0) */
     ouMu: number
-    /** OU process volatility - higher = larger movements */
-    ouSigma: number
   }
 }
 

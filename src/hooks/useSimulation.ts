@@ -3,7 +3,7 @@ import type { InferenceSession } from 'onnxruntime-web'
 import type { MainModule, MjModel, MjData, MotionClip, SimulationState } from '../types'
 import type { AnimalConfig } from '../types/animal-config'
 import type { VisualizationData } from '../types/visualization'
-import { runInference, runDecoderInference, extractActionInto } from './useONNX'
+import { runInference, runDecoderInference, extractActionInto, type NetworkMetadata } from './useONNX'
 import { buildObservation, buildProprioceptiveObservation } from '../lib/observation'
 
 export type InferenceMode = 'tracking' | 'latentWalk' | 'latentNoise'
@@ -15,6 +15,7 @@ interface UseSimulationProps {
   ghostData: MjData | null
   session: InferenceSession | null
   decoderSession: InferenceSession | null
+  metadata: NetworkMetadata | null
   clips: MotionClip[] | null
   selectedClip: number
   initialFrame: number
@@ -28,9 +29,10 @@ interface UseSimulationProps {
   onVisualizationData?: (data: VisualizationData) => void
 }
 
-// Ornstein-Uhlenbeck process state
+// Double-OU process state (velocity-driven for smooth motion)
 interface OUState {
-  x: Float32Array
+  x: Float32Array  // position
+  v: Float32Array  // velocity
   initialized: boolean
 }
 
@@ -44,20 +46,25 @@ function gaussianRandom(): number {
 }
 
 /**
- * Step the Ornstein-Uhlenbeck process in-place.
- * dx = theta * (mu - x) * dt + sigma * sqrt(dt) * dW
+ * Step the double-OU process in-place (velocity-driven for smooth motion).
+ * Velocity follows OU: dv = θ_v * (0 - v) * dt + σ_v * √dt * dW
+ * Position integrates velocity with mean-reversion: dx = v * dt + θ_x * (μ - x) * dt
  */
-function stepOUProcess(
-  state: Float32Array,
+function stepDoubleOUProcess(
+  state: OUState,
   dt: number,
-  theta: number,
-  mu: number,
-  sigma: number
+  thetaV: number,  // velocity mean-reversion rate
+  sigmaV: number,  // velocity volatility
+  thetaX: number,  // position mean-reversion rate
+  mu: number       // position target
 ): void {
   const sqrtDt = Math.sqrt(dt)
-  for (let i = 0; i < state.length; i++) {
+  for (let i = 0; i < state.x.length; i++) {
     const dW = gaussianRandom()
-    state[i] += theta * (mu - state[i]) * dt + sigma * sqrtDt * dW
+    // Velocity follows OU toward zero
+    state.v[i] += thetaV * (0 - state.v[i]) * dt + sigmaV * sqrtDt * dW
+    // Position integrates velocity + gentle reversion to mean
+    state.x[i] += state.v[i] * dt + thetaX * (mu - state.x[i]) * dt
   }
 }
 
@@ -71,6 +78,7 @@ export function useSimulation({
   ghostData,
   session,
   decoderSession,
+  metadata,
   clips,
   selectedClip,
   initialFrame,
@@ -89,14 +97,32 @@ export function useSimulation({
   const accumulatedTimeRef = useRef<number>(0)
   const prevActionRef = useRef<Float32Array>(new Float32Array(config.action.size))
 
-  // Pre-allocated buffer for latent noise mode
-  const latentNoiseRef = useRef<Float32Array>(new Float32Array(config.latentSpace?.size ?? 16))
+  // Use latent size from metadata (loaded from network), fallback to config for backwards compat
+  const latentSize = metadata?.latent_size ?? config.latentSpace?.size ?? 16
 
-  // OU process state for latent walk mode
+  // Pre-allocated buffer for latent noise mode
+  const latentNoiseRef = useRef<Float32Array>(new Float32Array(latentSize))
+
+  // Double-OU process state for latent walk mode
   const ouStateRef = useRef<OUState>({
-    x: new Float32Array(config.latentSpace?.size ?? 16),
+    x: new Float32Array(latentSize),
+    v: new Float32Array(latentSize),
     initialized: false,
   })
+
+  // Resize latent buffers when metadata loads/changes
+  useEffect(() => {
+    if (latentNoiseRef.current.length !== latentSize) {
+      latentNoiseRef.current = new Float32Array(latentSize)
+    }
+    if (ouStateRef.current.x.length !== latentSize) {
+      ouStateRef.current = {
+        x: new Float32Array(latentSize),
+        v: new Float32Array(latentSize),
+        initialized: false,
+      }
+    }
+  }, [latentSize])
 
   // Reset simulation to initial state
   const reset = useCallback(() => {
@@ -150,6 +176,7 @@ export function useSimulation({
 
     // Reset OU state for latent walk mode
     ouStateRef.current.x.fill(0)
+    ouStateRef.current.v.fill(0)
     ouStateRef.current.initialized = false
   }, [mujoco, model, data, ghostData, clips, selectedClip, initialFrame, config.action.size])
 
@@ -163,10 +190,10 @@ export function useSimulation({
   // Main simulation loop
   useEffect(() => {
     // For tracking mode, we need clips and session
-    // For latent walk/noise modes, we need decoderSession and latentSpace config
+    // For latent walk/noise modes, we need decoderSession, metadata (for latent size), and latentSpace config (for OU params)
     const canRunTracking = isReady && isPlaying && mujoco && model && data && session && clips && inferenceMode === 'tracking'
-    const canRunLatentWalk = isReady && isPlaying && mujoco && model && data && decoderSession && config.latentSpace && inferenceMode === 'latentWalk'
-    const canRunLatentNoise = isReady && isPlaying && mujoco && model && data && decoderSession && config.latentSpace && inferenceMode === 'latentNoise'
+    const canRunLatentWalk = isReady && isPlaying && mujoco && model && data && decoderSession && metadata && config.latentSpace && inferenceMode === 'latentWalk'
+    const canRunLatentNoise = isReady && isPlaying && mujoco && model && data && decoderSession && metadata && config.latentSpace && inferenceMode === 'latentNoise'
 
     if (!canRunTracking && !canRunLatentWalk && !canRunLatentNoise) {
       return
@@ -281,15 +308,16 @@ export function useSimulation({
           // === LATENT WALK MODE ===
           if (!ouStateRef.current.initialized) {
             ouStateRef.current.x.fill(0)
+            ouStateRef.current.v.fill(0)
             ouStateRef.current.initialized = true
           }
 
-          const { ouTheta, ouMu, ouSigma } = config.latentSpace
+          const { ouThetaV, ouSigmaV, ouThetaX, ouMu } = config.latentSpace
           let stepsThisFrame = 0
 
           while ((data.time as number) < targetSimTime && stepsThisFrame < MAX_STEPS_PER_FRAME) {
             stepsThisFrame++
-            stepOUProcess(ouStateRef.current.x, config.timing.ctrlDt, ouTheta, ouMu, ouSigma * noiseMagnitude)
+            stepDoubleOUProcess(ouStateRef.current, config.timing.ctrlDt, ouThetaV, ouSigmaV * noiseMagnitude, ouThetaX, ouMu)
             const proprioObs = buildProprioceptiveObservation(mujoco, model, data, prevActionRef.current, config)
             const logits = await runDecoderInference(decoderSession, ouStateRef.current.x, proprioObs)
             applyActionAndStep(logits)
@@ -299,7 +327,7 @@ export function useSimulation({
         } else if (inferenceMode === 'latentNoise' && decoderSession && config.latentSpace) {
           // === LATENT NOISE MODE ===
           const latentNoise = latentNoiseRef.current
-          const noiseScale = config.latentSpace.ouSigma * noiseMagnitude
+          const noiseScale = config.latentSpace.ouSigmaV * noiseMagnitude
           let stepsThisFrame = 0
 
           while ((data.time as number) < targetSimTime && stepsThisFrame < MAX_STEPS_PER_FRAME) {
@@ -335,7 +363,7 @@ export function useSimulation({
         animationRef.current = null
       }
     }
-  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, clips, selectedClip, speed, reset, config, inferenceMode, noiseMagnitude, selectedJointIndex, onVisualizationData])
+  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, metadata, clips, selectedClip, speed, reset, config, inferenceMode, noiseMagnitude, selectedJointIndex, onVisualizationData])
 
   return {
     currentFrame,

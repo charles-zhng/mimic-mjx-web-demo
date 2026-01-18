@@ -38,7 +38,7 @@ function App() {
   const config = useMemo(() => getAnimalConfig(animalId), [animalId])
 
   const { mujoco, model, data, ghostData, isReady: mujocoReady, error: mujocoError } = useMuJoCo(config)
-  const { session, decoderSession, isReady: onnxReady, error: onnxError } = useONNX(config)
+  const { session, decoderSession, metadata, isReady: onnxReady, error: onnxError } = useONNX(config)
   const { clips, isReady: clipsReady, error: clipsError } = useMotionClips(config)
 
   const isReady = mujocoReady && onnxReady && clipsReady
@@ -69,6 +69,7 @@ function App() {
     ghostData,
     session,
     decoderSession,
+    metadata,
     clips,
     selectedClip: initialPose.clip,
     initialFrame: initialPose.frame,
@@ -168,7 +169,7 @@ function App() {
             onJointChange={setSelectedJointIndex}
             isVisible={showAnalysis}
             onToggle={() => setShowAnalysis(!showAnalysis)}
-            latentSize={config.latentSpace?.size}
+            latentSize={metadata?.latent_size}
           />
         )}
 

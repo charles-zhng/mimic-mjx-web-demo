@@ -21,8 +21,8 @@ export const rodentConfig: AnimalConfig = {
   assets: {
     modelPath: '/models/rodent_scaled.xml',
     skinPath: '/models/rodent_walker_skin.skn',
-    onnxPath: '/nn/intention_network.onnx?v=9',
-    decoderOnnxPath: '/nn/decoder_only.onnx?v=9',
+    onnxPath: '/nn/intention_network.onnx?v=11',
+    decoderOnnxPath: '/nn/decoder_only.onnx?v=10',
     clipsPath: '/motions/clips.json',
   },
 
@@ -84,8 +84,9 @@ export const rodentConfig: AnimalConfig = {
 
   latentSpace: {
     size: 16,
-    ouTheta: 0.15,   // Mean reversion rate
-    ouMu: 0.0,       // Long-term mean
-    ouSigma: 1.0,    // Volatility
+    ouThetaV: 0.3,   // Velocity mean-reversion rate
+    ouSigmaV: 0.25,  // Velocity volatility (lower = smaller movements)
+    ouThetaX: 0.1,   // Position mean-reversion rate (higher = tighter bounds)
+    ouMu: 0.0,       // Position target
   },
 }
