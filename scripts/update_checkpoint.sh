@@ -39,7 +39,13 @@ $PYTHON "$SCRIPT_DIR/convert_checkpoint.py" \
     --output "$PROJECT_DIR/public/nn/intention_network.onnx"
 
 echo ""
-echo "Step 2: Updating cache versions..."
+echo "Step 2: Logging checkpoint provenance..."
+LOG_FILE="$PROJECT_DIR/public/nn/checkpoint.log"
+echo "$(date -Iseconds) | $(basename "$CHECKPOINT_PATH") | $CHECKPOINT_PATH" >> "$LOG_FILE"
+echo "Logged to $LOG_FILE"
+
+echo ""
+echo "Step 3: Updating cache versions..."
 # Increment version query params in config to bust browser cache
 CONFIG_FILE="$PROJECT_DIR/src/config/animals/rodent.ts"
 
