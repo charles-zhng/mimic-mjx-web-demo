@@ -116,6 +116,22 @@ export interface AnimalConfig {
     /** Position target (typically 0) */
     ouMu: number
   }
+
+  // Joystick mode configuration (optional)
+  joystick?: {
+    /** Task observation size for high-level policy (e.g., 57) */
+    taskObsSize: number
+    /** Latent size output by high-level policy (must match decoder input) */
+    latentSize: number
+    /** Command velocity ranges */
+    commandRanges: {
+      vx: [number, number]   // Forward/backward m/s
+      vy: [number, number]   // Lateral m/s
+      vyaw: [number, number] // Yaw rad/s
+    }
+    /** High-level policy ONNX path */
+    highlevelOnnxPath: string
+  }
 }
 
 /** Derive model body indices from reference indices */

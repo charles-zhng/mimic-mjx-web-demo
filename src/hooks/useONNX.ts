@@ -19,6 +19,7 @@ export interface NetworkMetadata {
 interface UseONNXResult {
   session: ort.InferenceSession | null
   decoderSession: ort.InferenceSession | null
+  highlevelSession: ort.InferenceSession | null
   metadata: NetworkMetadata | null
   isReady: boolean
   error: string | null
@@ -62,6 +63,7 @@ function validateMetadata(metadata: NetworkMetadata, config: AnimalConfig): void
 export function useONNX(config: AnimalConfig): UseONNXResult {
   const [session, setSession] = useState<ort.InferenceSession | null>(null)
   const [decoderSession, setDecoderSession] = useState<ort.InferenceSession | null>(null)
+  const [highlevelSession, setHighlevelSession] = useState<ort.InferenceSession | null>(null)
   const [metadata, setMetadata] = useState<NetworkMetadata | null>(null)
   const [isReady, setIsReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -76,6 +78,7 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
       setIsReady(false)
       setError(null)
       setMetadata(null)
+      setHighlevelSession(null)
     }
 
     if (initRef.current) return
@@ -91,9 +94,9 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
           graphOptimizationLevel: 'all' as const,
         }
 
-        // Load metadata, full model, and decoder model in parallel
+        // Load metadata, full model, decoder model, and high-level model in parallel
         const metadataPath = getMetadataPath(config.assets.onnxPath)
-        const [metadataResponse, onnxSession, decoderOnnxSession] = await Promise.all([
+        const [metadataResponse, onnxSession, decoderOnnxSession, highlevelOnnxSession] = await Promise.all([
           fetch(metadataPath).then(r => {
             if (!r.ok) throw new Error(`Failed to load network metadata: ${r.status}`)
             return r.json() as Promise<NetworkMetadata>
@@ -101,6 +104,9 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
           ort.InferenceSession.create(config.assets.onnxPath, sessionOptions),
           config.assets.decoderOnnxPath
             ? ort.InferenceSession.create(config.assets.decoderOnnxPath, sessionOptions)
+            : Promise.resolve(null),
+          config.joystick?.highlevelOnnxPath
+            ? ort.InferenceSession.create(config.joystick.highlevelOnnxPath, sessionOptions)
             : Promise.resolve(null),
         ])
 
@@ -110,6 +116,7 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
         setMetadata(metadataResponse)
         setSession(onnxSession)
         setDecoderSession(decoderOnnxSession)
+        setHighlevelSession(highlevelOnnxSession)
         setIsReady(true)
 
         console.log(`ONNX Runtime initialized for ${config.name}`)
@@ -120,6 +127,10 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
           console.log('  Decoder model inputs:', decoderOnnxSession.inputNames)
           console.log('  Decoder model outputs:', decoderOnnxSession.outputNames)
         }
+        if (highlevelOnnxSession) {
+          console.log('  High-level model inputs:', highlevelOnnxSession.inputNames)
+          console.log('  High-level model outputs:', highlevelOnnxSession.outputNames)
+        }
       } catch (e) {
         console.error('Failed to initialize ONNX Runtime:', e)
         setError(e instanceof Error ? e.message : 'Failed to initialize ONNX Runtime')
@@ -129,7 +140,7 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
     init()
   }, [config])
 
-  return { session, decoderSession, metadata, isReady, error }
+  return { session, decoderSession, highlevelSession, metadata, isReady, error }
 }
 
 /**
@@ -184,4 +195,19 @@ export async function runDecoderInference(
   const results = await session.run(feeds)
   const output = results[session.outputNames[0]]
   return output.data as Float32Array
+}
+
+/**
+ * Run inference on the high-level policy network (for joystick mode).
+ * Input: task observation vector (prev_action + sensors + command)
+ * Output: latent vector (already has tanh applied)
+ */
+export async function runHighlevelInference(
+  session: ort.InferenceSession,
+  taskObs: Float32Array
+): Promise<Float32Array> {
+  const tensor = new ort.Tensor('float32', taskObs, [1, taskObs.length])
+  const feeds = { task_obs: tensor }
+  const results = await session.run(feeds)
+  return results['latent'].data as Float32Array
 }

@@ -9,9 +9,15 @@ Since tf2onnx has compatibility issues with NumPy 2.x and JAX, we directly
 construct the ONNX graph from the checkpoint weights.
 
 Usage:
+    # Convert MIMIC tracking policy (encoder + decoder)
     python convert_checkpoint.py \
         --checkpoint /path/to/checkpoint \
         --output model.onnx
+
+    # Convert high-level joystick policy
+    python convert_checkpoint.py \
+        --highlevel-checkpoint /path/to/highlevel_checkpoint \
+        --output highlevel_policy.onnx
 """
 
 import argparse
@@ -28,6 +34,7 @@ import jax.numpy as jnp
 import numpy as np
 import onnx
 from onnx import TensorProto, helper, numpy_helper
+from orbax import checkpoint as ocp
 
 from track_mjx.agent import checkpointing
 
@@ -616,13 +623,310 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     print("Done!")
 
 
+# =============================================================================
+# High-Level Policy Conversion (for joystick mode)
+# =============================================================================
+
+@dataclass
+class HighLevelNetworkDims:
+    """Network dimensions for high-level policy."""
+    task_obs_size: int
+    latent_size: int
+    hidden_layer_sizes: list[int]
+
+    @property
+    def num_hidden_layers(self) -> int:
+        return len(self.hidden_layer_sizes)
+
+
+def build_highlevel_onnx_model(
+    normalizer_state: dict,
+    policy_params: dict,
+    dims: HighLevelNetworkDims,
+):
+    """Build ONNX model for high-level joystick policy.
+
+    The high-level policy is a simple MLP that maps task observations to latent
+    space. It has embedded normalization (mean/std from running statistics).
+
+    Architecture:
+        task_obs -> normalize -> hidden layers (SiLU) -> latent
+
+    Args:
+        normalizer_state: Dict with 'mean', 'std' arrays (from orbax restore)
+        policy_params: Dict with 'params' containing MLP layer weights
+        dims: HighLevelNetworkDims with all dimension info
+
+    Returns:
+        ONNX ModelProto
+    """
+    # Extract normalization statistics (dict access since we restore as numpy)
+    norm_mean = np.array(normalizer_state['mean']).astype(np.float32)
+    norm_std = np.array(normalizer_state['std']).astype(np.float32) + 1e-8
+
+    # Convert policy params to numpy
+    params = policy_params['params']
+    params_np = jax.tree.map(lambda x: np.array(x).astype(np.float32), params)
+
+    # Build initializers
+    initializers = [
+        numpy_helper.from_array(norm_mean, "norm_mean"),
+        numpy_helper.from_array(norm_std, "norm_std"),
+    ]
+
+    # Add hidden layer weights
+    # Brax PPO uses naming: hidden_0, hidden_1, ... for hidden layers
+    # Final layer for latent output
+    for i in range(dims.num_hidden_layers):
+        layer_key = f'hidden_{i}'
+        layer = params_np[layer_key]
+        initializers.append(numpy_helper.from_array(layer['kernel'], f"hidden_{i}_w"))
+        initializers.append(numpy_helper.from_array(layer['bias'], f"hidden_{i}_b"))
+
+    # Output layer (maps to latent)
+    # In brax PPO, this is typically named based on num_hidden_layers
+    output_layer_key = f'hidden_{dims.num_hidden_layers}'
+    output_layer = params_np[output_layer_key]
+    initializers.append(numpy_helper.from_array(output_layer['kernel'], "output_w"))
+    initializers.append(numpy_helper.from_array(output_layer['bias'], "output_b"))
+
+    # Build computation graph
+    nodes = []
+    node_idx = 0
+
+    def make_node(op_type, inputs, outputs, name=None, **attrs):
+        nonlocal node_idx
+        if name is None:
+            name = f"node_{node_idx}"
+        node_idx += 1
+        return helper.make_node(op_type, inputs, outputs, name=name, **attrs)
+
+    # 1. Normalize: (task_obs - mean) / std
+    nodes.append(make_node("Sub", ["task_obs", "norm_mean"], ["obs_centered"]))
+    nodes.append(make_node("Div", ["obs_centered", "norm_std"], ["obs_normalized"]))
+
+    # 2. Hidden layers with SiLU activation
+    x = "obs_normalized"
+    for i in range(dims.num_hidden_layers):
+        # Dense: x = x @ W + b
+        nodes.append(make_node("MatMul", [x, f"hidden_{i}_w"], [f"hidden_{i}_mm"]))
+        nodes.append(make_node("Add", [f"hidden_{i}_mm", f"hidden_{i}_b"], [f"hidden_{i}_pre"]))
+        # SiLU: x * sigmoid(x)
+        nodes.append(make_node("Sigmoid", [f"hidden_{i}_pre"], [f"hidden_{i}_sig"]))
+        nodes.append(make_node("Mul", [f"hidden_{i}_pre", f"hidden_{i}_sig"], [f"hidden_{i}_out"]))
+        x = f"hidden_{i}_out"
+
+    # 3. Output layer (outputs mean + log_std for Gaussian)
+    nodes.append(make_node("MatMul", [x, "output_w"], ["output_mm"]))
+    nodes.append(make_node("Add", ["output_mm", "output_b"], ["action_logits"]))
+
+    # 4. Extract mean (first half) and apply tanh to get latent
+    # For NormalTanhDistribution, mode = tanh(mean)
+    actual_latent_size = dims.latent_size // 2  # Output is mean + log_std
+    initializers.append(numpy_helper.from_array(np.array([0], dtype=np.int64), "slice_start"))
+    initializers.append(numpy_helper.from_array(np.array([actual_latent_size], dtype=np.int64), "slice_end"))
+    initializers.append(numpy_helper.from_array(np.array([1], dtype=np.int64), "slice_axis"))
+
+    nodes.append(helper.make_node(
+        "Slice",
+        inputs=["action_logits", "slice_start", "slice_end", "slice_axis"],
+        outputs=["action_mean"],
+        name="slice_mean"
+    ))
+    nodes.append(make_node("Tanh", ["action_mean"], ["latent"]))
+
+    # Define inputs/outputs
+    inputs = [
+        helper.make_tensor_value_info("task_obs", TensorProto.FLOAT, [None, dims.task_obs_size]),
+    ]
+    outputs = [
+        helper.make_tensor_value_info("latent", TensorProto.FLOAT, [None, actual_latent_size]),
+    ]
+
+    # Create graph
+    graph = helper.make_graph(
+        nodes,
+        "highlevel_policy",
+        inputs,
+        outputs,
+        initializers,
+    )
+
+    # Create model
+    model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 17)])
+    model.ir_version = 8
+
+    return model
+
+
+def find_latest_checkpoint_step(checkpoint_path: str) -> str:
+    """Find the latest checkpoint step in an orbax checkpoint directory."""
+    ckpt_dir = Path(checkpoint_path)
+    steps = []
+    for item in ckpt_dir.iterdir():
+        if item.is_dir() and item.name.isdigit():
+            steps.append(int(item.name))
+    if not steps:
+        raise ValueError(f"No checkpoint steps found in {checkpoint_path}")
+    return str(max(steps))
+
+
+def load_highlevel_checkpoint(checkpoint_path: str):
+    """Load high-level brax PPO checkpoint with orbax.
+
+    Handles the cuda:0 sharding issue by restoring as numpy arrays.
+
+    Args:
+        checkpoint_path: Path to orbax checkpoint step directory
+
+    Returns:
+        Tuple of (normalizer_state, policy_params, value_params) as numpy arrays
+    """
+    from orbax.checkpoint._src.metadata import value as value_metadata
+    from orbax.checkpoint._src.serialization import type_handlers
+    from orbax.checkpoint import args as ocp_args
+
+    handler = ocp.PyTreeCheckpointHandler(use_ocdbt=True, use_zarr3=True)
+    checkpointer = ocp.Checkpointer(handler)
+
+    # Get metadata to know the structure
+    meta = checkpointer.metadata(checkpoint_path)
+
+    # Build restore args to restore as numpy arrays (avoids sharding issues)
+    def build_restore_args(meta_tree):
+        if isinstance(meta_tree, value_metadata.ArrayMetadata):
+            return type_handlers.RestoreArgs(
+                restore_type=np.ndarray,
+                dtype=meta_tree.dtype,
+            )
+        elif isinstance(meta_tree, dict):
+            return {k: build_restore_args(v) for k, v in meta_tree.items()}
+        elif isinstance(meta_tree, (list, tuple)):
+            return type(meta_tree)(build_restore_args(v) for v in meta_tree)
+        else:
+            return meta_tree
+
+    restore_args = build_restore_args(meta.item_metadata.tree)
+    params = checkpointer.restore(checkpoint_path, args=ocp_args.PyTreeRestore(item=restore_args))
+
+    return params[0], params[1], params[2]
+
+
+def convert_highlevel_to_onnx(checkpoint_path: str, output_path: str, latent_size: int | None = None):
+    """Convert high-level brax PPO checkpoint to ONNX format.
+
+    Args:
+        checkpoint_path: Path to orbax checkpoint directory
+        output_path: Path for output ONNX file
+        latent_size: Size of latent output (auto-detected if None)
+    """
+    import json
+
+    print(f"Loading high-level checkpoint from: {checkpoint_path}")
+
+    # Find latest step
+    step = find_latest_checkpoint_step(checkpoint_path)
+    ckpt_step_path = str(Path(checkpoint_path) / step)
+    print(f"Using checkpoint step: {step}")
+
+    # Load orbax checkpoint as numpy arrays
+    normalizer_state, policy_params, value_params = load_highlevel_checkpoint(ckpt_step_path)
+    del value_params  # Not needed for inference
+
+    print(f"Normalizer mean shape: {normalizer_state['mean'].shape}")
+    print(f"Normalizer std shape: {normalizer_state['std'].shape}")
+
+    # Infer network dimensions from params
+    policy_keys = list(policy_params['params'].keys())
+    print(f"Policy param keys: {policy_keys}")
+
+    # Count hidden layers (hidden_0, hidden_1, ..., hidden_N where N is output)
+    hidden_layer_count = sum(1 for k in policy_keys if k.startswith('hidden_'))
+    num_hidden_layers = hidden_layer_count - 1  # Last one is output
+
+    # Get hidden layer sizes from weights
+    hidden_layer_sizes = []
+    for i in range(num_hidden_layers):
+        kernel = policy_params['params'][f'hidden_{i}']['kernel']
+        hidden_layer_sizes.append(kernel.shape[1])
+
+    task_obs_size = int(normalizer_state['mean'].shape[0])
+
+    # Auto-detect latent size from final layer output
+    final_kernel = policy_params['params'][f'hidden_{num_hidden_layers}']['kernel']
+    detected_latent_size = final_kernel.shape[1]
+    if latent_size is not None and latent_size != detected_latent_size:
+        print(f"Warning: specified latent_size={latent_size} differs from detected={detected_latent_size}")
+        print(f"Using detected latent size: {detected_latent_size}")
+    latent_size = detected_latent_size
+
+    dims = HighLevelNetworkDims(
+        task_obs_size=task_obs_size,
+        latent_size=latent_size,
+        hidden_layer_sizes=hidden_layer_sizes,
+    )
+    print(f"Task obs size: {dims.task_obs_size}")
+    print(f"Network output size: {dims.latent_size} (mean + log_std)")
+    print(f"Actual latent size: {dims.latent_size // 2} (after extracting mean and tanh)")
+    print(f"Hidden layer sizes: {dims.hidden_layer_sizes}")
+
+    # Build ONNX model
+    print("Building high-level ONNX model...")
+    model = build_highlevel_onnx_model(normalizer_state, policy_params, dims)
+
+    # Check model
+    print("Checking ONNX model...")
+    onnx.checker.check_model(model)
+
+    # Save model
+    print(f"Saving ONNX model to: {output_path}")
+    onnx.save(model, output_path)
+
+    # Verify with ONNX Runtime
+    print("Verifying with ONNX Runtime...")
+    import onnxruntime as ort
+
+    session = ort.InferenceSession(output_path)
+    print(f"  Inputs: {[i.name for i in session.get_inputs()]}")
+    print(f"  Outputs: {[o.name for o in session.get_outputs()]}")
+
+    test_input = np.zeros((1, dims.task_obs_size), dtype=np.float32)
+    ort_output = session.run(["latent"], {"task_obs": test_input})[0]
+    print(f"  Output shape: {ort_output.shape}")
+    print(f"  ONNX Runtime verification passed!")
+
+    # Update network_metadata.json if it exists
+    # Note: latent_size is the actual output size (half of network output due to mean+logstd)
+    actual_latent_size = dims.latent_size // 2
+    metadata_path = Path(output_path).parent / "network_metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path, "r") as f:
+            metadata = json.load(f)
+        metadata["highlevel_task_obs_size"] = dims.task_obs_size
+        metadata["highlevel_hidden_layer_sizes"] = dims.hidden_layer_sizes
+        metadata["highlevel_latent_size"] = actual_latent_size
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2)
+        print(f"Updated network metadata at: {metadata_path}")
+    else:
+        print(f"Note: {metadata_path} not found, skipping metadata update")
+
+    print("Done!")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Convert Flax checkpoint to ONNX")
     parser.add_argument(
         "--checkpoint",
         type=str,
-        required=True,
-        help="Path to checkpoint directory",
+        default=None,
+        help="Path to MIMIC tracking checkpoint directory",
+    )
+    parser.add_argument(
+        "--highlevel-checkpoint",
+        type=str,
+        default=None,
+        help="Path to high-level (joystick) brax PPO checkpoint directory",
     )
     parser.add_argument(
         "--output",
@@ -636,14 +940,29 @@ def main():
         default=None,
         help="Checkpoint step to load (default: latest)",
     )
+    parser.add_argument(
+        "--latent-size",
+        type=int,
+        default=16,
+        help="Latent size for high-level policy (default: 16)",
+    )
 
     args = parser.parse_args()
+
+    # Validate args
+    if args.checkpoint is None and args.highlevel_checkpoint is None:
+        parser.error("Must specify either --checkpoint or --highlevel-checkpoint")
+    if args.checkpoint is not None and args.highlevel_checkpoint is not None:
+        parser.error("Cannot specify both --checkpoint and --highlevel-checkpoint")
 
     # Ensure output directory exists
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    convert_to_onnx(args.checkpoint, str(output_path), args.step)
+    if args.checkpoint:
+        convert_to_onnx(args.checkpoint, str(output_path), args.step)
+    else:
+        convert_highlevel_to_onnx(args.highlevel_checkpoint, str(output_path), args.latent_size)
 
 
 if __name__ == "__main__":

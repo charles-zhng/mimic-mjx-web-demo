@@ -410,3 +410,95 @@ export function buildProprioceptiveObservation(
 
   return obs
 }
+
+// =============================================================================
+// Task Observation for Joystick Mode
+// =============================================================================
+
+// Pre-allocated buffer for task observation
+let _taskObsBuffer: Float32Array | null = null
+
+/**
+ * Build task observation for high-level joystick policy.
+ *
+ * Order matches joystick.py _get_obs():
+ * - prev_action: 38 dims
+ * - kinematic_sensors: 9 dims (accelerometer 3 + velocimeter 3 + gyro 3)
+ * - touch_sensors: 4 dims
+ * - origin: 3 dims (world origin in torso frame)
+ * - command: 3 dims [vx, vy, vyaw]
+ *
+ * Total: 57 dims
+ *
+ * @param command Velocity command [vx, vy, vyaw]
+ */
+export function buildTaskObservation(
+  _mujoco: MainModule,
+  _model: MjModel,
+  data: MjData,
+  prevAction: Float32Array,
+  command: [number, number, number],
+  config: AnimalConfig
+): Float32Array {
+  const taskObsSize = config.joystick?.taskObsSize ?? 57
+
+  // Reuse buffer (lazily allocate if size changed)
+  if (!_taskObsBuffer || _taskObsBuffer.length !== taskObsSize) {
+    _taskObsBuffer = new Float32Array(taskObsSize)
+  }
+  const obs = _taskObsBuffer
+
+  // Get sensor and position data
+  const sensordata = (data as unknown as Record<string, Float64Array>).sensordata
+  const xpos = (data as unknown as Record<string, Float64Array>).xpos
+  const xmat = (data as unknown as Record<string, Float64Array>).xmat
+
+  let idx = 0
+
+  // 1. Previous action (38 dims)
+  for (let i = 0; i < config.action.size; i++) {
+    obs[idx++] = prevAction[i]
+  }
+
+  // 2. Kinematic sensors (9 dims): accelerometer, velocimeter, gyro
+  const kinematic = config.sensors.kinematic
+  for (let i = kinematic.accelerometer[0]; i < kinematic.accelerometer[1]; i++) {
+    obs[idx++] = sensordata[i]
+  }
+  for (let i = kinematic.velocimeter[0]; i < kinematic.velocimeter[1]; i++) {
+    obs[idx++] = sensordata[i]
+  }
+  for (let i = kinematic.gyro[0]; i < kinematic.gyro[1]; i++) {
+    obs[idx++] = sensordata[i]
+  }
+
+  // 3. Touch sensors (4 dims)
+  for (const touchSensor of config.sensors.touch) {
+    obs[idx++] = sensordata[touchSensor.index]
+  }
+
+  // 4. Origin (3 dims): world origin in torso frame
+  // This is -torso_pos @ torso_xmat (egocentric origin)
+  const torsoIdx = config.body.torsoIndex
+  const torsoPosX = xpos[torsoIdx * 3]
+  const torsoPosY = xpos[torsoIdx * 3 + 1]
+  const torsoPosZ = xpos[torsoIdx * 3 + 2]
+
+  // Torso rotation matrix (3x3 row-major)
+  const torsoMatBase = torsoIdx * 9
+  // Negate torso position
+  const negPosX = -torsoPosX
+  const negPosY = -torsoPosY
+  const negPosZ = -torsoPosZ
+  // Matrix-vector multiply: (-pos) @ torso_mat
+  obs[idx++] = negPosX * xmat[torsoMatBase + 0] + negPosY * xmat[torsoMatBase + 3] + negPosZ * xmat[torsoMatBase + 6]
+  obs[idx++] = negPosX * xmat[torsoMatBase + 1] + negPosY * xmat[torsoMatBase + 4] + negPosZ * xmat[torsoMatBase + 7]
+  obs[idx++] = negPosX * xmat[torsoMatBase + 2] + negPosY * xmat[torsoMatBase + 5] + negPosZ * xmat[torsoMatBase + 8]
+
+  // 5. Command (3 dims): [vx, vy, vyaw]
+  obs[idx++] = command[0]
+  obs[idx++] = command[1]
+  obs[idx++] = command[2]
+
+  return obs
+}

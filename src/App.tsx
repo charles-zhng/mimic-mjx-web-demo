@@ -6,6 +6,7 @@ import { useMuJoCo } from './hooks/useMuJoCo'
 import { useONNX } from './hooks/useONNX'
 import { useMotionClips } from './hooks/useMotionClips'
 import { useSimulation, type InferenceMode } from './hooks/useSimulation'
+import { useKeyboardInput } from './hooks/useKeyboardInput'
 import { getAnimalConfig, defaultAnimalId } from './config/animals'
 import type { VisualizationData, VisualizationHistory } from './types/visualization'
 
@@ -38,14 +39,20 @@ function App() {
   const config = useMemo(() => getAnimalConfig(animalId), [animalId])
 
   const { mujoco, model, data, ghostData, isReady: mujocoReady, error: mujocoError } = useMuJoCo(config)
-  const { session, decoderSession, metadata, isReady: onnxReady, error: onnxError } = useONNX(config)
+  const { session, decoderSession, highlevelSession, metadata, isReady: onnxReady, error: onnxError } = useONNX(config)
   const { clips, isReady: clipsReady, error: clipsError } = useMotionClips(config)
+
+  // Keyboard input for joystick mode
+  const joystickCommand = useKeyboardInput(
+    inferenceMode === 'joystick',
+    config.joystick?.commandRanges
+  )
 
   const isReady = mujocoReady && onnxReady && clipsReady
   const error = mujocoError || onnxError || clipsError
 
   // Determine which clip and frame to use for initial pose
-  const initialPose = (inferenceMode === 'latentWalk' || inferenceMode === 'latentNoise')
+  const initialPose = (inferenceMode === 'latentWalk' || inferenceMode === 'latentNoise' || inferenceMode === 'joystick')
     ? LATENT_WALK_INITIAL_POSES[latentWalkInitialPose]
     : { clip: selectedClip, frame: 0 }
 
@@ -69,6 +76,7 @@ function App() {
     ghostData,
     session,
     decoderSession,
+    highlevelSession,
     metadata,
     clips,
     selectedClip: initialPose.clip,
@@ -80,6 +88,7 @@ function App() {
     inferenceMode,
     noiseMagnitude,
     selectedJointIndex,
+    joystickCommand: inferenceMode === 'joystick' ? joystickCommand : null,
     onVisualizationData: inferenceMode === 'tracking' && showAnalysis ? handleVisualizationData : undefined,
   })
 
@@ -174,8 +183,15 @@ function App() {
         )}
 
         <div className="status-bar">
-          {config.name} | {inferenceMode === 'tracking' ? 'Tracking' : 'Latent Walk'}
+          {config.name} | {
+            inferenceMode === 'tracking' ? 'Tracking' :
+            inferenceMode === 'joystick' ? 'Joystick' :
+            'Latent Walk'
+          }
           {inferenceMode === 'tracking' && ` | Frame: ${simulation.currentFrame} / ${clips?.[selectedClip]?.num_frames ?? 0}`}
+          {inferenceMode === 'joystick' && joystickCommand && (
+            ` | vx: ${joystickCommand.vx.toFixed(2)} vy: ${joystickCommand.vy.toFixed(2)} vyaw: ${joystickCommand.vyaw.toFixed(2)}`
+          )}
           {' | '}
           Speed: {speed.toFixed(1)}x
         </div>

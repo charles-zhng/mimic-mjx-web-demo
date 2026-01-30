@@ -46,6 +46,7 @@ export default function Controls({
           value={inferenceMode}
           options={[
             { value: 'tracking', label: 'Motion Tracking' },
+            { value: 'joystick', label: 'Joystick Control (W QE)' },
             { value: 'latentNoise', label: 'Latent Random Noise (independent)' },
             { value: 'latentWalk', label: 'Latent Random Walk (OU process)' },
           ]}
@@ -66,6 +67,30 @@ export default function Controls({
             disabled={!clips}
           />
         </div>
+      ) : inferenceMode === 'joystick' ? (
+        <>
+          <div className="control-group">
+            <label>Initial Pose</label>
+            <Select
+              value={latentWalkInitialPose}
+              options={[
+                { value: 'default', label: 'Default' },
+                { value: 'rearing', label: 'Rearing' },
+              ]}
+              onChange={(value) => onLatentWalkInitialPoseChange(value as LatentWalkInitialPose)}
+            />
+          </div>
+          <div className="keyboard-help">
+            <div className="keyboard-help-title">Keyboard Controls</div>
+            <div className="keyboard-help-row">
+              <span className="keycap">W</span> Forward
+            </div>
+            <div className="keyboard-help-row">
+              <span className="keycap">Q</span> Turn Right
+              <span className="keycap">E</span> Turn Left
+            </div>
+          </div>
+        </>
       ) : (
         <div className="control-group">
           <label>Initial Pose</label>

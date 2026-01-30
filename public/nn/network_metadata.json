@@ -13,5 +13,12 @@
     1024,
     1024,
     512
-  ]
+  ],
+  "highlevel_task_obs_size": 57,
+  "highlevel_hidden_layer_sizes": [
+    1024,
+    512,
+    256
+  ],
+  "highlevel_latent_size": 16
 }
