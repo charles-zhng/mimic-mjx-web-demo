@@ -911,6 +911,16 @@ def convert_highlevel_to_onnx(checkpoint_path: str, output_path: str, latent_siz
     else:
         print(f"Note: {metadata_path} not found, skipping metadata update")
 
+    # Log checkpoint provenance (same format as update_checkpoint.sh)
+    from datetime import datetime
+    log_path = Path(output_path).parent / "checkpoint.log"
+    checkpoint_name = Path(checkpoint_path).name
+    timestamp = datetime.now().astimezone().isoformat(timespec='seconds')
+    log_entry = f"{timestamp} | highlevel: {checkpoint_name} | {checkpoint_path}\n"
+    with open(log_path, "a") as f:
+        f.write(log_entry)
+    print(f"Logged checkpoint provenance to: {log_path}")
+
     print("Done!")
 
 
