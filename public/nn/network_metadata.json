@@ -14,7 +14,7 @@
     1024,
     512
   ],
-  "highlevel_task_obs_size": 57,
+  "highlevel_task_obs_size": 56,
   "highlevel_hidden_layer_sizes": [
     1024,
     512,

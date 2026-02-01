@@ -362,7 +362,7 @@ export function useSimulation({
             // Build task observation (prev_action + sensors + origin + command)
             const taskObs = buildTaskObservation(
               mujoco, model, data, prevActionRef.current,
-              [joystickCommand.vx, joystickCommand.vy, joystickCommand.vyaw],
+              [joystickCommand.vx, joystickCommand.vyaw],
               config
             )
 

@@ -190,7 +190,7 @@ function App() {
           }
           {inferenceMode === 'tracking' && ` | Frame: ${simulation.currentFrame} / ${clips?.[selectedClip]?.num_frames ?? 0}`}
           {inferenceMode === 'joystick' && joystickCommand && (
-            ` | vx: ${joystickCommand.vx.toFixed(2)} vy: ${joystickCommand.vy.toFixed(2)} vyaw: ${joystickCommand.vyaw.toFixed(2)}`
+            ` | vx: ${joystickCommand.vx.toFixed(2)} vyaw: ${joystickCommand.vyaw.toFixed(2)}`
           )}
           {' | '}
           Speed: {speed.toFixed(1)}x

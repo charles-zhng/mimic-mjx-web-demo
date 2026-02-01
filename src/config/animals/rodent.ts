@@ -91,12 +91,11 @@ export const rodentConfig: AnimalConfig = {
   },
 
   joystick: {
-    taskObsSize: 57,  // prev_action(38) + kinematic(9) + touch(4) + origin(3) + command(3)
+    taskObsSize: 56,  // prev_action(38) + kinematic(9) + touch(4) + origin(3) + command(2)
     latentSize: 16,   // Must match decoder input latent size
     commandRanges: {
-      vx: [-0.5, 0.5],    // Forward/backward m/s
-      vy: [-0.3, 0.3],    // Lateral m/s
-      vyaw: [-1.0, 1.0],  // Yaw rad/s
+      vx: [0.0, 0.5],     // m/s, forward only
+      vyaw: [-1.0, 1.0],  // rad/s
     },
     highlevelOnnxPath: '/nn/highlevel_policy.onnx',
   },

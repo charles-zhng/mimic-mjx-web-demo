@@ -126,7 +126,6 @@ export interface AnimalConfig {
     /** Command velocity ranges */
     commandRanges: {
       vx: [number, number]   // Forward/backward m/s
-      vy: [number, number]   // Lateral m/s
       vyaw: [number, number] // Yaw rad/s
     }
     /** High-level policy ONNX path */

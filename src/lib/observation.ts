@@ -426,21 +426,21 @@ let _taskObsBuffer: Float32Array | null = null
  * - kinematic_sensors: 9 dims (accelerometer 3 + velocimeter 3 + gyro 3)
  * - touch_sensors: 4 dims
  * - origin: 3 dims (world origin in torso frame)
- * - command: 3 dims [vx, vy, vyaw]
+ * - command: 2 dims [vx, vyaw]
  *
- * Total: 57 dims
+ * Total: 56 dims
  *
- * @param command Velocity command [vx, vy, vyaw]
+ * @param command Velocity command [vx, vyaw]
  */
 export function buildTaskObservation(
   _mujoco: MainModule,
   _model: MjModel,
   data: MjData,
   prevAction: Float32Array,
-  command: [number, number, number],
+  command: [number, number],
   config: AnimalConfig
 ): Float32Array {
-  const taskObsSize = config.joystick?.taskObsSize ?? 57
+  const taskObsSize = config.joystick?.taskObsSize ?? 56
 
   // Reuse buffer (lazily allocate if size changed)
   if (!_taskObsBuffer || _taskObsBuffer.length !== taskObsSize) {
@@ -495,10 +495,9 @@ export function buildTaskObservation(
   obs[idx++] = negPosX * xmat[torsoMatBase + 1] + negPosY * xmat[torsoMatBase + 4] + negPosZ * xmat[torsoMatBase + 7]
   obs[idx++] = negPosX * xmat[torsoMatBase + 2] + negPosY * xmat[torsoMatBase + 5] + negPosZ * xmat[torsoMatBase + 8]
 
-  // 5. Command (3 dims): [vx, vy, vyaw]
+  // 5. Command (2 dims): [vx, vyaw]
   obs[idx++] = command[0]
   obs[idx++] = command[1]
-  obs[idx++] = command[2]
 
   return obs
 }

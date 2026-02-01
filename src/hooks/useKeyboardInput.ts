@@ -6,22 +6,18 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 export interface JoystickCommand {
   /** Forward/backward velocity in m/s */
   vx: number
-  /** Lateral velocity (strafe) in m/s */
-  vy: number
   /** Yaw rotation rate in rad/s */
   vyaw: number
 }
 
 interface CommandRanges {
   vx: [number, number]
-  vy: [number, number]
   vyaw: [number, number]
 }
 
 const DEFAULT_RANGES: CommandRanges = {
-  vx: [-0.5, 0.5],
-  vy: [-0.3, 0.3],
-  vyaw: [-1.0, 1.0],
+  vx: [0.0, 0.5],     // m/s, forward only
+  vyaw: [-1.0, 1.0],  // rad/s
 }
 
 /**
@@ -42,30 +38,36 @@ export function useKeyboardInput(
 ): JoystickCommand {
   // Track which keys are currently pressed
   const keysRef = useRef<Set<string>>(new Set())
-  const [command, setCommand] = useState<JoystickCommand>({ vx: 0, vy: 0, vyaw: 0 })
+  const [command, setCommand] = useState<JoystickCommand>({ vx: 0, vyaw: 0 })
 
   // Compute command from pressed keys
   const updateCommand = useCallback(() => {
     const keys = keysRef.current
 
     let vx = 0
-    let vy = 0
     let vyaw = 0
 
-    // Forward (W only)
-    if (keys.has('w') || keys.has('W')) vx += ranges.vx[1]
+    const wPressed = keys.has('w') || keys.has('W')
+    const qPressed = keys.has('q') || keys.has('Q')
+    const ePressed = keys.has('e') || keys.has('E')
+
+    // Forward (W)
+    if (wPressed) vx += ranges.vx[1] * 0.8
 
     // Turn right/left (Q/E)
-    if (keys.has('q') || keys.has('Q')) vyaw += ranges.vyaw[1]
-    if (keys.has('e') || keys.has('E')) vyaw += ranges.vyaw[0]
+    if (qPressed) vyaw += ranges.vyaw[1] * 0.75
+    if (ePressed) vyaw += ranges.vyaw[0] * 0.75
 
-    setCommand({ vx, vy, vyaw })
+    // Small forward velocity when turning without W
+    if ((qPressed || ePressed) && !wPressed) vx = 0.05
+
+    setCommand({ vx, vyaw })
   }, [ranges])
 
   useEffect(() => {
     if (!enabled) {
       // Clear command when disabled
-      setCommand({ vx: 0, vy: 0, vyaw: 0 })
+      setCommand({ vx: 0, vyaw: 0 })
       keysRef.current.clear()
       return
     }
@@ -94,7 +96,7 @@ export function useKeyboardInput(
     // Clear keys when window loses focus
     const handleBlur = () => {
       keysRef.current.clear()
-      setCommand({ vx: 0, vy: 0, vyaw: 0 })
+      setCommand({ vx: 0, vyaw: 0 })
     }
 
     window.addEventListener('keydown', handleKeyDown)
