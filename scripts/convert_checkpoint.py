@@ -72,11 +72,24 @@ def validate_checkpoint(ckpt: dict) -> None:
 
     normalizer_params, network_params = policy
 
-    # Validate normalizer params (DictRunningStatisticsState with imitation_target and proprioception)
-    if not hasattr(normalizer_params, 'imitation_target') or not hasattr(normalizer_params, 'proprioception'):
+    # Validate normalizer has mean/std attributes with nested structure
+    if not hasattr(normalizer_params, 'mean') or not hasattr(normalizer_params, 'std'):
         raise CheckpointValidationError(
-            "Invalid normalizer_params: expected DictRunningStatisticsState with 'imitation_target' and 'proprioception'. "
+            "Invalid normalizer_params: expected RunningStatisticsState with 'mean' and 'std'. "
             f"Found attributes: {[a for a in dir(normalizer_params) if not a.startswith('_')]}"
+        )
+
+    # Validate nested state structure
+    try:
+        state_mean = normalizer_params.mean['state']
+        if 'imitation_target' not in state_mean or 'proprioception' not in state_mean:
+            raise CheckpointValidationError(
+                f"Invalid mean['state']: expected 'imitation_target' and 'proprioception'. "
+                f"Found: {list(state_mean.keys())}"
+            )
+    except (TypeError, KeyError) as e:
+        raise CheckpointValidationError(
+            f"Invalid normalizer structure: expected mean['state']['imitation_target']. Error: {e}"
         )
 
     # Validate network params structure
@@ -178,16 +191,24 @@ def get_obs_sizes(cfg):
 
 
 def get_normalizer_arrays(normalizer_params):
-    """Extract mean and std arrays from DictRunningStatisticsState normalizer.
+    """Extract mean and std arrays from nested RunningStatisticsState.
+
+    The vnl-playground structure stores statistics as:
+        normalizer_params.mean['state']['imitation_target']
+        normalizer_params.std['state']['imitation_target']
+        etc.
 
     Returns:
         norm_mean: Full observation mean (float32 numpy array)
         norm_std: Full observation std (float32 numpy array)
     """
-    ref_mean = np.array(normalizer_params.imitation_target.mean).astype(np.float32)
-    ref_std = np.array(normalizer_params.imitation_target.std).astype(np.float32)
-    proprio_mean = np.array(normalizer_params.proprioception.mean).astype(np.float32)
-    proprio_std = np.array(normalizer_params.proprioception.std).astype(np.float32)
+    state_mean = normalizer_params.mean['state']
+    state_std = normalizer_params.std['state']
+
+    ref_mean = np.array(state_mean['imitation_target']).astype(np.float32)
+    ref_std = np.array(state_std['imitation_target']).astype(np.float32)
+    proprio_mean = np.array(state_mean['proprioception']).astype(np.float32)
+    proprio_std = np.array(state_std['proprioception']).astype(np.float32)
     norm_mean = np.concatenate([ref_mean, proprio_mean])
     norm_std = np.concatenate([ref_std, proprio_std])
     return norm_mean, norm_std
@@ -562,8 +583,14 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     dummy_key = jax.random.PRNGKey(0)
 
     test_input_dict = {
-        'imitation_target': jnp.zeros((1, dims.reference_obs_size)),
-        'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
+        'state': {
+            'imitation_target': jnp.zeros((1, dims.reference_obs_size)),
+            'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
+        },
+        'privileged_state': {
+            'imitation_target': jnp.zeros((1, dims.reference_obs_size)),
+            'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
+        },
     }
     flax_output, _, _ = ppo_network.policy_network.apply(
         normalizer_params, network_params, test_input_dict, dummy_key,
