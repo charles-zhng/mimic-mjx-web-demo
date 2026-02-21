@@ -130,6 +130,8 @@ export interface AnimalConfig {
     }
     /** High-level policy ONNX path */
     highlevelOnnxPath: string
+    /** Decoder ONNX path paired with the high-level policy */
+    decoderOnnxPath: string
   }
 }
 

@@ -20,6 +20,7 @@ interface UseONNXResult {
   session: ort.InferenceSession | null
   decoderSession: ort.InferenceSession | null
   highlevelSession: ort.InferenceSession | null
+  joystickDecoderSession: ort.InferenceSession | null
   metadata: NetworkMetadata | null
   isReady: boolean
   error: string | null
@@ -64,6 +65,7 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
   const [session, setSession] = useState<ort.InferenceSession | null>(null)
   const [decoderSession, setDecoderSession] = useState<ort.InferenceSession | null>(null)
   const [highlevelSession, setHighlevelSession] = useState<ort.InferenceSession | null>(null)
+  const [joystickDecoderSession, setJoystickDecoderSession] = useState<ort.InferenceSession | null>(null)
   const [metadata, setMetadata] = useState<NetworkMetadata | null>(null)
   const [isReady, setIsReady] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -79,6 +81,7 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
       setError(null)
       setMetadata(null)
       setHighlevelSession(null)
+      setJoystickDecoderSession(null)
     }
 
     if (initRef.current) return
@@ -94,9 +97,9 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
           graphOptimizationLevel: 'all' as const,
         }
 
-        // Load metadata, full model, decoder model, and high-level model in parallel
+        // Load metadata, full model, decoder model, high-level model, and joystick decoder in parallel
         const metadataPath = getMetadataPath(config.assets.onnxPath)
-        const [metadataResponse, onnxSession, decoderOnnxSession, highlevelOnnxSession] = await Promise.all([
+        const [metadataResponse, onnxSession, decoderOnnxSession, highlevelOnnxSession, joystickDecoderOnnxSession] = await Promise.all([
           fetch(metadataPath).then(r => {
             if (!r.ok) throw new Error(`Failed to load network metadata: ${r.status}`)
             return r.json() as Promise<NetworkMetadata>
@@ -108,6 +111,9 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
           config.joystick?.highlevelOnnxPath
             ? ort.InferenceSession.create(config.joystick.highlevelOnnxPath, sessionOptions)
             : Promise.resolve(null),
+          config.joystick?.decoderOnnxPath
+            ? ort.InferenceSession.create(config.joystick.decoderOnnxPath, sessionOptions)
+            : Promise.resolve(null),
         ])
 
         // Validate metadata against config
@@ -117,6 +123,7 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
         setSession(onnxSession)
         setDecoderSession(decoderOnnxSession)
         setHighlevelSession(highlevelOnnxSession)
+        setJoystickDecoderSession(joystickDecoderOnnxSession)
         setIsReady(true)
 
         console.log(`ONNX Runtime initialized for ${config.name}`)
@@ -131,6 +138,10 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
           console.log('  High-level model inputs:', highlevelOnnxSession.inputNames)
           console.log('  High-level model outputs:', highlevelOnnxSession.outputNames)
         }
+        if (joystickDecoderOnnxSession) {
+          console.log('  Joystick decoder inputs:', joystickDecoderOnnxSession.inputNames)
+          console.log('  Joystick decoder outputs:', joystickDecoderOnnxSession.outputNames)
+        }
       } catch (e) {
         console.error('Failed to initialize ONNX Runtime:', e)
         setError(e instanceof Error ? e.message : 'Failed to initialize ONNX Runtime')
@@ -140,7 +151,7 @@ export function useONNX(config: AnimalConfig): UseONNXResult {
     init()
   }, [config])
 
-  return { session, decoderSession, highlevelSession, metadata, isReady, error }
+  return { session, decoderSession, highlevelSession, joystickDecoderSession, metadata, isReady, error }
 }
 
 /**

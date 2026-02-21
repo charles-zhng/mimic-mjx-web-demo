@@ -82,14 +82,14 @@ def validate_checkpoint(ckpt: dict) -> None:
     # Validate nested state structure
     try:
         state_mean = normalizer_params.mean['state']
-        if 'imitation_target' not in state_mean or 'proprioception' not in state_mean:
+        if 'task_obs' not in state_mean or 'proprioception' not in state_mean:
             raise CheckpointValidationError(
-                f"Invalid mean['state']: expected 'imitation_target' and 'proprioception'. "
+                f"Invalid mean['state']: expected 'task_obs' and 'proprioception'. "
                 f"Found: {list(state_mean.keys())}"
             )
     except (TypeError, KeyError) as e:
         raise CheckpointValidationError(
-            f"Invalid normalizer structure: expected mean['state']['imitation_target']. Error: {e}"
+            f"Invalid normalizer structure: expected mean['state']['task_obs']. Error: {e}"
         )
 
     # Validate network params structure
@@ -184,7 +184,7 @@ class NetworkDims:
 def get_obs_sizes(cfg):
     """Extract observation sizes from config."""
     nc = cfg.network_config
-    reference_obs_size = nc.obs_sizes.imitation_target
+    reference_obs_size = nc.obs_sizes.task_obs
     proprio_obs_size = nc.obs_sizes.proprioception
     obs_size = reference_obs_size + proprio_obs_size
     return obs_size, reference_obs_size, proprio_obs_size
@@ -193,9 +193,9 @@ def get_obs_sizes(cfg):
 def get_normalizer_arrays(normalizer_params):
     """Extract mean and std arrays from nested RunningStatisticsState.
 
-    The vnl-playground structure stores statistics as:
-        normalizer_params.mean['state']['imitation_target']
-        normalizer_params.std['state']['imitation_target']
+    Structure:
+        normalizer_params.mean['state']['task_obs']
+        normalizer_params.std['state']['task_obs']
         etc.
 
     Returns:
@@ -205,8 +205,8 @@ def get_normalizer_arrays(normalizer_params):
     state_mean = normalizer_params.mean['state']
     state_std = normalizer_params.std['state']
 
-    ref_mean = np.array(state_mean['imitation_target']).astype(np.float32)
-    ref_std = np.array(state_std['imitation_target']).astype(np.float32)
+    ref_mean = np.array(state_mean['task_obs']).astype(np.float32)
+    ref_std = np.array(state_std['task_obs']).astype(np.float32)
     proprio_mean = np.array(state_mean['proprioception']).astype(np.float32)
     proprio_std = np.array(state_std['proprioception']).astype(np.float32)
     norm_mean = np.concatenate([ref_mean, proprio_mean])
@@ -502,13 +502,16 @@ def extract_encoder_decoder_params(policy_params):
     return encoder_params, decoder_params
 
 
-def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
+def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None,
+                    no_decoder: bool = False, decoder_only: bool = False):
     """Convert checkpoint to ONNX format.
 
     Args:
         checkpoint_path: Path to checkpoint directory
         output_path: Path for output ONNX file
         step: Optional checkpoint step (default: latest)
+        no_decoder: If True, skip building decoder_only.onnx
+        decoder_only: If True, only build decoder_only.onnx (skip intention_network.onnx)
     """
     print(f"Loading checkpoint from: {checkpoint_path}")
 
@@ -538,86 +541,88 @@ def convert_to_onnx(checkpoint_path: str, output_path: str, step: int = None):
     # Extract encoder and decoder params
     encoder_params, decoder_params = extract_encoder_decoder_params(network_params)
 
-    # Build full ONNX model (encoder + decoder)
-    print("Building full ONNX model...")
-    model = build_onnx_model(normalizer_params, encoder_params, decoder_params, dims)
+    build_full = not decoder_only
+    build_decoder = not no_decoder
 
-    # Check model
-    print("Checking full ONNX model...")
-    onnx.checker.check_model(model)
-
-    # Save model
-    print(f"Saving full ONNX model to: {output_path}")
-    onnx.save(model, output_path)
-
-    # Build decoder-only ONNX model (for latent space random walk mode)
-    print("Building decoder-only ONNX model...")
-    decoder_model = build_decoder_only_onnx_model(normalizer_params, decoder_params, dims)
-
-    # Check decoder model
-    print("Checking decoder-only ONNX model...")
-    onnx.checker.check_model(decoder_model)
-
-    # Save decoder model
-    decoder_output_path = str(Path(output_path).with_name("decoder_only.onnx"))
-    print(f"Saving decoder-only ONNX model to: {decoder_output_path}")
-    onnx.save(decoder_model, decoder_output_path)
-
-    # Verify with ONNX Runtime
-    print("Verifying with ONNX Runtime...")
     import onnxruntime as ort
 
-    session = ort.InferenceSession(output_path)
-    input_name = session.get_inputs()[0].name
-    output_name = session.get_outputs()[0].name
+    # Build full ONNX model (encoder + decoder)
+    if build_full:
+        print("Building full ONNX model...")
+        model = build_onnx_model(normalizer_params, encoder_params, decoder_params, dims)
 
-    # Test input (flat for ONNX)
-    test_input = np.zeros((1, dims.obs_size), dtype=np.float32)
+        print("Checking full ONNX model...")
+        onnx.checker.check_model(model)
 
-    ort_output = session.run([output_name], {input_name: test_input})[0]
-    print(f"ONNX Runtime output shape: {ort_output.shape}")
+        print(f"Saving full ONNX model to: {output_path}")
+        onnx.save(model, output_path)
 
-    # Compare with original Flax module
-    print("Comparing with original Flax module...")
-    ppo_network = checkpointing.make_ppo_network_from_cfg(cfg)
-    dummy_key = jax.random.PRNGKey(0)
+        # Verify with ONNX Runtime
+        print("Verifying full ONNX model...")
+        session = ort.InferenceSession(output_path)
+        input_name = session.get_inputs()[0].name
+        output_name = session.get_outputs()[0].name
 
-    test_input_dict = {
-        'state': {
-            'imitation_target': jnp.zeros((1, dims.reference_obs_size)),
-            'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
-        },
-        'privileged_state': {
-            'imitation_target': jnp.zeros((1, dims.reference_obs_size)),
-            'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
-        },
-    }
-    flax_output, _, _ = ppo_network.policy_network.apply(
-        normalizer_params, network_params, test_input_dict, dummy_key,
-        deterministic=True, get_activation=False
-    )
+        test_input = np.zeros((1, dims.obs_size), dtype=np.float32)
+        ort_output = session.run([output_name], {input_name: test_input})[0]
+        print(f"ONNX Runtime output shape: {ort_output.shape}")
 
-    max_diff = np.max(np.abs(np.array(flax_output) - ort_output))
-    print(f"Max difference between Flax and ONNX: {max_diff}")
+        # Compare with original Flax module
+        print("Comparing with original Flax module...")
+        ppo_network = checkpointing.make_ppo_network_from_cfg(cfg)
+        dummy_key = jax.random.PRNGKey(0)
 
-    if max_diff > 1e-3:
-        print("WARNING: Large difference detected!")
+        test_input_dict = {
+            'state': {
+                'task_obs': jnp.zeros((1, dims.reference_obs_size)),
+                'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
+            },
+            'privileged_state': {
+                'task_obs': jnp.zeros((1, dims.reference_obs_size)),
+                'proprioception': jnp.zeros((1, dims.proprio_obs_size)),
+            },
+        }
+        flax_output, _, _ = ppo_network.policy_network.apply(
+            normalizer_params, network_params, test_input_dict, dummy_key,
+            deterministic=True, get_activation=False
+        )
+
+        max_diff = np.max(np.abs(np.array(flax_output) - ort_output))
+        print(f"Max difference between Flax and ONNX: {max_diff}")
+
+        if max_diff > 1e-3:
+            print("WARNING: Large difference detected!")
+        else:
+            print("Verification passed!")
     else:
-        print("Verification passed!")
+        print("Skipping intention_network.onnx (--decoder-only)")
 
-    # Verify decoder-only model
-    print("\nVerifying decoder-only ONNX model...")
-    decoder_session = ort.InferenceSession(decoder_output_path)
+    # Build decoder-only ONNX model (for latent space random walk mode)
+    decoder_output_path = str(Path(output_path).with_name("decoder_only.onnx"))
+    if build_decoder:
+        print("Building decoder-only ONNX model...")
+        decoder_model = build_decoder_only_onnx_model(normalizer_params, decoder_params, dims)
 
-    test_latent = np.zeros((1, dims.latent_size), dtype=np.float32)
-    test_proprio = np.zeros((1, dims.proprio_obs_size), dtype=np.float32)
+        print("Checking decoder-only ONNX model...")
+        onnx.checker.check_model(decoder_model)
 
-    decoder_output = decoder_session.run(
-        [decoder_session.get_outputs()[0].name],
-        {"latent": test_latent, "proprio_obs": test_proprio}
-    )[0]
-    print(f"Decoder-only output shape: {decoder_output.shape}")
-    print(f"Decoder-only model verified successfully!")
+        print(f"Saving decoder-only ONNX model to: {decoder_output_path}")
+        onnx.save(decoder_model, decoder_output_path)
+
+        print("Verifying decoder-only ONNX model...")
+        decoder_session = ort.InferenceSession(decoder_output_path)
+
+        test_latent = np.zeros((1, dims.latent_size), dtype=np.float32)
+        test_proprio = np.zeros((1, dims.proprio_obs_size), dtype=np.float32)
+
+        decoder_output = decoder_session.run(
+            [decoder_session.get_outputs()[0].name],
+            {"latent": test_latent, "proprio_obs": test_proprio}
+        )[0]
+        print(f"Decoder-only output shape: {decoder_output.shape}")
+        print(f"Decoder-only model verified successfully!")
+    else:
+        print("Skipping decoder_only.onnx (--no-decoder)")
 
     # Save normalization parameters
     norm_params_path = Path(output_path).with_suffix(".norm.npz")
@@ -666,6 +671,18 @@ class HighLevelNetworkDims:
         return len(self.hidden_layer_sizes)
 
 
+def get_highlevel_normalizer_arrays(normalizer_state: dict) -> tuple[np.ndarray, np.ndarray]:
+    """Extract mean and std arrays from highlevel policy normalizer.
+
+    Returns:
+        norm_mean: Task observation mean (float32 numpy array)
+        norm_std: Task observation std (float32 numpy array)
+    """
+    norm_mean = np.array(normalizer_state['mean']['state']['task_obs']).astype(np.float32)
+    norm_std = np.array(normalizer_state['std']['state']['task_obs']).astype(np.float32)
+    return norm_mean, norm_std
+
+
 def build_highlevel_onnx_model(
     normalizer_state: dict,
     policy_params: dict,
@@ -687,9 +704,9 @@ def build_highlevel_onnx_model(
     Returns:
         ONNX ModelProto
     """
-    # Extract normalization statistics (dict access since we restore as numpy)
-    norm_mean = np.array(normalizer_state['mean']).astype(np.float32)
-    norm_std = np.array(normalizer_state['std']).astype(np.float32) + 1e-8
+    # Extract normalization statistics from nested vnl-playground structure
+    norm_mean, norm_std = get_highlevel_normalizer_arrays(normalizer_state)
+    norm_std = norm_std + 1e-8
 
     # Convert policy params to numpy
     params = policy_params['params']
@@ -848,6 +865,7 @@ def convert_highlevel_to_onnx(checkpoint_path: str, output_path: str, latent_siz
         latent_size: Size of latent output (auto-detected if None)
     """
     import json
+    import shutil
 
     print(f"Loading high-level checkpoint from: {checkpoint_path}")
 
@@ -860,8 +878,10 @@ def convert_highlevel_to_onnx(checkpoint_path: str, output_path: str, latent_siz
     normalizer_state, policy_params, value_params = load_highlevel_checkpoint(ckpt_step_path)
     del value_params  # Not needed for inference
 
-    print(f"Normalizer mean shape: {normalizer_state['mean'].shape}")
-    print(f"Normalizer std shape: {normalizer_state['std'].shape}")
+    # Extract normalizer arrays from vnl-playground nested structure
+    norm_mean, norm_std = get_highlevel_normalizer_arrays(normalizer_state)
+    print(f"Normalizer mean shape: {norm_mean.shape}")
+    print(f"Normalizer std shape: {norm_std.shape}")
 
     # Infer network dimensions from params
     policy_keys = list(policy_params['params'].keys())
@@ -877,7 +897,7 @@ def convert_highlevel_to_onnx(checkpoint_path: str, output_path: str, latent_siz
         kernel = policy_params['params'][f'hidden_{i}']['kernel']
         hidden_layer_sizes.append(kernel.shape[1])
 
-    task_obs_size = int(normalizer_state['mean'].shape[0])
+    task_obs_size = int(norm_mean.shape[0])
 
     # Auto-detect latent size from final layer output
     final_kernel = policy_params['params'][f'hidden_{num_hidden_layers}']['kernel']
@@ -938,6 +958,16 @@ def convert_highlevel_to_onnx(checkpoint_path: str, output_path: str, latent_siz
     else:
         print(f"Note: {metadata_path} not found, skipping metadata update")
 
+    # Snapshot the current decoder_only.onnx as the joystick decoder.
+    # The highlevel policy was trained against this decoder, so they must stay paired.
+    decoder_src = Path(output_path).parent / "decoder_only.onnx"
+    decoder_dst = Path(output_path).parent / "highlevel_decoder.onnx"
+    if decoder_src.exists():
+        shutil.copy2(decoder_src, decoder_dst)
+        print(f"Copied {decoder_src} -> {decoder_dst}")
+    else:
+        print(f"Warning: {decoder_src} not found, skipping joystick decoder snapshot")
+
     # Log checkpoint provenance (same format as update_checkpoint.sh)
     from datetime import datetime
     log_path = Path(output_path).parent / "checkpoint.log"
@@ -983,6 +1013,17 @@ def main():
         default=16,
         help="Latent size for high-level policy (default: 16)",
     )
+    decoder_group = parser.add_mutually_exclusive_group()
+    decoder_group.add_argument(
+        "--no-decoder",
+        action="store_true",
+        help="Skip building decoder_only.onnx (only update intention_network.onnx)",
+    )
+    decoder_group.add_argument(
+        "--decoder-only",
+        action="store_true",
+        help="Only build decoder_only.onnx (skip intention_network.onnx)",
+    )
 
     args = parser.parse_args()
 
@@ -997,7 +1038,8 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     if args.checkpoint:
-        convert_to_onnx(args.checkpoint, str(output_path), args.step)
+        convert_to_onnx(args.checkpoint, str(output_path), args.step,
+                        no_decoder=args.no_decoder, decoder_only=args.decoder_only)
     else:
         convert_highlevel_to_onnx(args.highlevel_checkpoint, str(output_path), args.latent_size)
 

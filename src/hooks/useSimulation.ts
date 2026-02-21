@@ -17,6 +17,7 @@ interface UseSimulationProps {
   session: InferenceSession | null
   decoderSession: InferenceSession | null
   highlevelSession: InferenceSession | null
+  joystickDecoderSession: InferenceSession | null
   metadata: NetworkMetadata | null
   clips: MotionClip[] | null
   selectedClip: number
@@ -82,6 +83,7 @@ export function useSimulation({
   session,
   decoderSession,
   highlevelSession,
+  joystickDecoderSession,
   metadata,
   clips,
   selectedClip,
@@ -200,7 +202,7 @@ export function useSimulation({
     const canRunTracking = isReady && isPlaying && mujoco && model && data && session && clips && inferenceMode === 'tracking'
     const canRunLatentWalk = isReady && isPlaying && mujoco && model && data && decoderSession && metadata && config.latentSpace && inferenceMode === 'latentWalk'
     const canRunLatentNoise = isReady && isPlaying && mujoco && model && data && decoderSession && metadata && config.latentSpace && inferenceMode === 'latentNoise'
-    const canRunJoystick = isReady && isPlaying && mujoco && model && data && highlevelSession && decoderSession && config.joystick && joystickCommand && inferenceMode === 'joystick'
+    const canRunJoystick = isReady && isPlaying && mujoco && model && data && highlevelSession && joystickDecoderSession && config.joystick && joystickCommand && inferenceMode === 'joystick'
 
     if (!canRunTracking && !canRunLatentWalk && !canRunLatentNoise && !canRunJoystick) {
       return
@@ -351,7 +353,7 @@ export function useSimulation({
           }
 
           setCurrentFrame(Math.floor(targetSimTime * config.timing.mocapHz))
-        } else if (inferenceMode === 'joystick' && highlevelSession && decoderSession && config.joystick && joystickCommand) {
+        } else if (inferenceMode === 'joystick' && highlevelSession && joystickDecoderSession && config.joystick && joystickCommand) {
           // === JOYSTICK MODE ===
           // Run high-level policy to get latent, then decoder to get action
           let stepsThisFrame = 0
@@ -372,8 +374,8 @@ export function useSimulation({
             // Build proprioceptive observation for decoder
             const proprioObs = buildProprioceptiveObservation(mujoco, model, data, prevActionRef.current, config)
 
-            // Run decoder to get action logits
-            const logits = await runDecoderInference(decoderSession, latent, proprioObs)
+            // Run joystick's own decoder to get action logits
+            const logits = await runDecoderInference(joystickDecoderSession, latent, proprioObs)
 
             applyActionAndStep(logits)
           }
@@ -398,7 +400,7 @@ export function useSimulation({
         animationRef.current = null
       }
     }
-  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, highlevelSession, metadata, clips, selectedClip, speed, reset, config, inferenceMode, noiseMagnitude, selectedJointIndex, joystickCommand, onVisualizationData])
+  }, [isReady, isPlaying, mujoco, model, data, ghostData, session, decoderSession, highlevelSession, joystickDecoderSession, metadata, clips, selectedClip, speed, reset, config, inferenceMode, noiseMagnitude, selectedJointIndex, joystickCommand, onVisualizationData])
 
   return {
     currentFrame,

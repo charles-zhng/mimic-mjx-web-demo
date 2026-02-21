@@ -21,8 +21,8 @@ export const rodentConfig: AnimalConfig = {
   assets: {
     modelPath: '/models/rodent_scaled.xml',
     skinPath: '/models/rodent_walker_skin.skn',
-    onnxPath: '/nn/intention_network.onnx?v=12',
-    decoderOnnxPath: '/nn/decoder_only.onnx?v=11',
+    onnxPath: '/nn/intention_network.onnx?v=14',
+    decoderOnnxPath: '/nn/decoder_only.onnx?v=15',
     clipsPath: '/motions/clips.json',
   },
 
@@ -98,5 +98,6 @@ export const rodentConfig: AnimalConfig = {
       vyaw: [-1.0, 1.0],  // rad/s
     },
     highlevelOnnxPath: '/nn/highlevel_policy.onnx',
+    decoderOnnxPath: '/nn/highlevel_decoder.onnx',
   },
 }

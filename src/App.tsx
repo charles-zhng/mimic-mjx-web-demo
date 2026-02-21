@@ -39,7 +39,7 @@ function App() {
   const config = useMemo(() => getAnimalConfig(animalId), [animalId])
 
   const { mujoco, model, data, ghostData, isReady: mujocoReady, error: mujocoError } = useMuJoCo(config)
-  const { session, decoderSession, highlevelSession, metadata, isReady: onnxReady, error: onnxError } = useONNX(config)
+  const { session, decoderSession, highlevelSession, joystickDecoderSession, metadata, isReady: onnxReady, error: onnxError } = useONNX(config)
   const { clips, isReady: clipsReady, error: clipsError } = useMotionClips(config)
 
   // Keyboard input for joystick mode
@@ -77,6 +77,7 @@ function App() {
     session,
     decoderSession,
     highlevelSession,
+    joystickDecoderSession,
     metadata,
     clips,
     selectedClip: initialPose.clip,
