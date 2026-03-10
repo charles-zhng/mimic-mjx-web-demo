@@ -32,10 +32,16 @@ const DEFAULT_RANGES: CommandRanges = {
  * @param ranges Command value ranges for each axis
  * @returns Current joystick command based on pressed keys
  */
+export interface KeyboardInputResult {
+  command: JoystickCommand
+  pressKey: (key: string) => void
+  releaseKey: (key: string) => void
+}
+
 export function useKeyboardInput(
   enabled: boolean = true,
   ranges: CommandRanges = DEFAULT_RANGES
-): JoystickCommand {
+): KeyboardInputResult {
   // Track which keys are currently pressed
   const keysRef = useRef<Set<string>>(new Set())
   const [command, setCommand] = useState<JoystickCommand>({ vx: 0, vyaw: 0 })
@@ -110,5 +116,19 @@ export function useKeyboardInput(
     }
   }, [enabled, updateCommand])
 
-  return command
+  const pressKey = useCallback((key: string) => {
+    if (!keysRef.current.has(key)) {
+      keysRef.current.add(key)
+      updateCommand()
+    }
+  }, [updateCommand])
+
+  const releaseKey = useCallback((key: string) => {
+    if (keysRef.current.has(key)) {
+      keysRef.current.delete(key)
+      updateCommand()
+    }
+  }, [updateCommand])
+
+  return { command, pressKey, releaseKey }
 }

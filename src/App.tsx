@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from 'react'
 import Viewer from './components/Viewer'
 import Controls from './components/Controls'
+import TouchButtons from './components/TouchButtons'
 import AnalysisPanel from './components/AnalysisPanel'
 import { useMuJoCo } from './hooks/useMuJoCo'
 import { useONNX } from './hooks/useONNX'
@@ -43,7 +44,7 @@ function App() {
   const { clips, isReady: clipsReady, error: clipsError } = useMotionClips(config)
 
   // Keyboard input for joystick mode
-  const joystickCommand = useKeyboardInput(
+  const { command: joystickCommand, pressKey, releaseKey } = useKeyboardInput(
     inferenceMode === 'joystick',
     config.joystick?.commandRanges
   )
@@ -181,6 +182,10 @@ function App() {
             onToggle={() => setShowAnalysis(!showAnalysis)}
             latentSize={metadata?.latent_size}
           />
+        )}
+
+        {inferenceMode === 'joystick' && (
+          <TouchButtons pressKey={pressKey} releaseKey={releaseKey} />
         )}
 
         <div className="status-bar">
