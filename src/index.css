@@ -409,9 +409,9 @@ body,
 /* Touch Buttons for Joystick Mode */
 .touch-buttons {
   position: absolute;
-  bottom: 100px;
-  left: 16px;
-  right: 16px;
+  bottom: 140px;
+  left: 48px;
+  right: 24px;
   z-index: 100;
   display: flex;
   justify-content: space-between;
@@ -429,8 +429,8 @@ body,
 }
 
 .touch-button {
-  width: 64px;
-  height: 64px;
+  width: 96px;
+  height: 96px;
   display: flex;
   align-items: center;
   justify-content: center;
