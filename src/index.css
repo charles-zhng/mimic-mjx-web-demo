@@ -138,7 +138,8 @@ body,
 
 /* Keyboard Help for Joystick Mode — hide on touchscreen devices */
 @media (pointer: coarse) {
-  .keyboard-help {
+  .keyboard-help,
+  .viewer-help {
     display: none;
   }
 }
@@ -316,6 +317,34 @@ body,
   font-size: 12px;
   color: #b0b0b0;
   z-index: 100;
+}
+
+.track-body-toggle {
+  position: absolute;
+  bottom: 52px;
+  left: 16px;
+  background: #1c1c1c;
+  border: 1px solid #333;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #b0b0b0;
+  cursor: pointer;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: inherit;
+}
+
+.track-body-toggle:hover {
+  border-color: #ebebeb;
+  color: #ebebeb;
+}
+
+.track-body-toggle.active {
+  background: #ebebeb;
+  color: #000;
+  border-color: #ebebeb;
 }
 
 .project-link {

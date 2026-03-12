@@ -54,9 +54,13 @@ interface ViewerProps {
   isReady: boolean
   config: AnimalConfig
   inferenceMode: InferenceMode
+  trackBody: boolean
 }
 
-export default function Viewer({ mujoco, model, data, ghostData, isReady, config, inferenceMode }: ViewerProps) {
+// MuJoCo camera name used for body tracking (mode="trackcom" in XML)
+const TRACK_CAMERA_NAME = 'close_profile-rodent'
+
+export default function Viewer({ mujoco, model, data, ghostData, isReady, config, inferenceMode, trackBody }: ViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const sceneRef = useRef<THREE.Scene | null>(null)
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
@@ -65,6 +69,10 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
   const mujocoRendererRef = useRef<MuJoCoRenderer | null>(null)
   const animationFrameRef = useRef<number | null>(null)
   const hasCenteredRef = useRef(false)
+  // Cached MuJoCo trackcom camera params: body index and world-frame position offset
+  const trackCamRef = useRef<{ bodyId: number; pos: [number, number, number] } | null>(null)
+  const trackBodyRef = useRef(trackBody)
+  trackBodyRef.current = trackBody
 
   // Initialize Three.js scene
   useEffect(() => {
@@ -163,6 +171,19 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
     // Create ghost meshes for reference visualization
     mujocoRendererRef.current.createGhostGeometries()
 
+    // Look up trackcom camera params (mjOBJ_CAMERA = 7)
+    const camId = mujoco.mj_name2id(model, 7, TRACK_CAMERA_NAME)
+    console.log('trackcom camera lookup:', TRACK_CAMERA_NAME, 'id:', camId)
+    if (camId >= 0) {
+      const camPos = (model as unknown as Record<string, Float64Array>).cam_pos
+      const camBodyId = (model as unknown as Record<string, Int32Array>).cam_bodyid
+      trackCamRef.current = {
+        bodyId: camBodyId[camId],
+        pos: [camPos[camId * 3], camPos[camId * 3 + 1], camPos[camId * 3 + 2]],
+      }
+      console.log('trackcom camera:', trackCamRef.current)
+    }
+
     console.log('MuJoCo renderer created with ghost reference')
   }, [isReady, mujoco, model])
 
@@ -211,6 +232,25 @@ export default function Viewer({ mujoco, model, data, ghostData, isReady, config
   // Render loop
   useEffect(() => {
     const render = () => {
+      // Camera body tracking using MuJoCo trackcom camera
+      if (trackBodyRef.current && trackCamRef.current && controlsRef.current && cameraRef.current && data) {
+        const { bodyId } = trackCamRef.current
+        const subtreeCom = (data as unknown as Record<string, Float64Array>).subtree_com
+        const comX = subtreeCom[bodyId * 3]
+        const comY = subtreeCom[bodyId * 3 + 1]
+        const comZ = subtreeCom[bodyId * 3 + 2]
+
+        const target = controlsRef.current.target
+        const dx = comX - target.x
+        const dy = comY - target.y
+        const dz = comZ - target.z
+
+        target.set(comX, comY, comZ)
+        cameraRef.current.position.x += dx
+        cameraRef.current.position.y += dy
+        cameraRef.current.position.z += dz
+      }
+
       if (controlsRef.current) {
         controlsRef.current.update()
       }
