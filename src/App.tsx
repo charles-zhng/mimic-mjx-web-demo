@@ -184,7 +184,7 @@ function App() {
           />
         )}
 
-        {inferenceMode === 'joystick' && (
+        {inferenceMode === 'joystick' && navigator.maxTouchPoints > 0 && (
           <TouchButtons pressKey={pressKey} releaseKey={releaseKey} />
         )}
 
