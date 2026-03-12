@@ -48,7 +48,7 @@ export default function Controls({
             { value: 'tracking', label: 'Motion Tracking' },
             { value: 'joystick', label: 'Joystick Control (W QE)' },
             { value: 'latentNoise', label: 'Latent Random Noise (independent)' },
-            { value: 'latentWalk', label: 'Latent Random Walk (OU process)' },
+            // { value: 'latentWalk', label: 'Latent Random Walk (OU process)' },  // Hidden for now, logic retained
           ]}
           onChange={(value) => onModeChange(value as InferenceMode)}
         />
